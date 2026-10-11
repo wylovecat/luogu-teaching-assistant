@@ -33,35 +33,110 @@ npm run package     # typecheck + production build + smoke + vsce package
 
 | 契约 | 把握程度 | 备注 |
 | --- | --- | --- |
-| `GET /problem/<pid>?_contentOnly=1` → `currentData.problem` | 已验证 | 公开接口，不登录可读。字段映射见 `problems/statement.ts` |
-| `memoryLimit` 是**字节**、`timeLimit` 是**毫秒** | 已验证 | 内存直接显示会差三个数量级，换算在 `statementFromLuogu` 里 |
-| `GET /problem/list?keyword=…&_contentOnly=1` → `currentData.problems.result` | 已验证 | `result` 是数组还是以 pid 为键的对象，两种都收了 |
-| `GET /user?_contentOnly=1` → `currentData.user` 探活 | 已验证 | |
-| `POST /fe/api/problem/submit/<pid>` 的表单域 | ⚠️ **未核对** | 现按 `csrf_token` / `lang` / `enableO2` + 文件域 `code` 组包 |
-| 提交成功后 302 的 `Location` 形如 `/record/<rid>` | ⚠️ **未核对** | 取不到 rid 时会把响应原文截一段抛出来，方便一眼看出是哪一类失败 |
-| `GET /record/<rid>?_contentOnly=1` 的判定文本在 `judgeResult.verdict` | ⚠️ **未核对** | |
-| 提交表单的 `lang` 取值（默认 `cpp`） | ⚠️ **未核对** | 以站点提交框实际选项为准 |
+| 读接口要带请求头 `x-lentille-request: content-only` + `Accept: application/json` | **已验证** | **`?_contentOnly=1` 这个查询参数已失效** —— 带上它也会退回整页 HTML。2026-10-12 实测 |
+| 信封：payload 在 `data`（Lentille），旧的 `currentData` 已下线 | **已验证** | 两种都收，判据是「`data` 是不是非空对象」 |
+| `GET /problem/<pid>` → `data.problem` | **已验证** | 公开接口，不登录可读。字段映射见 `problems/statement.ts` |
+| 题面字段：标题是 `name`、正文在 `content`（`formatI`/`formatO`）、限制在 `limits` | **已验证** | 顶层 `title` 存在但是**空串**；平铺的 `description`/`memoryLimit` 已不存在 |
+| `limits.time` 是**毫秒**、`limits.memory` 是 **KB** | **已验证** | 都是数组，取最大值。128MB 的题给 `memory:[131072]` —— 当字节算会差三个数量级 |
+| 样例是 `[[输入,输出],…]` 元组数组 | **已验证** | 不是 `{input,output}` 对象 |
+| `GET /problem/list?keyword=…` → `data.problems.result` | **已验证** | `result` 是数组还是以 pid 为键的对象，两种都收了 |
+| `GET /_lfe/config` → `CodeLanguage` / `RecordStatus` 枚举 | **已验证** | 不登录可读。语言 id 与判定状态码的权威来源，见下 |
+| `POST /fe/api/problem/submit/<pid>` 的请求体是 **JSON** | **已验证** | 2026-10-12 浏览器真机抓包：`content-type: application/json`。**不是** multipart 表单 |
+| 提交要带 `X-Requested-With: XMLHttpRequest` + `Origin` | **已验证** | 浏览器自动加的，**Node 不会替你补** —— 漏了可能被鉴权挡 |
+| CSRF 走 `x-csrf-token` 头，Referer 指向**题目页** | **已验证** | 抓包确认 `referer: /problem/P1001`。洛谷按页面发令牌，主页那个过不了鉴权 |
+| 提交请求的 Cookie 里**也带 C3VK** | **已验证** | 抓包见 `C3VK=…`。所以 POST 也受反爬挑战约束 —— 这正是不敢自动重试 POST 的原因 |
+| `lang` 是**数字**语言 id | **已验证** | 抓包 payload：`{"lang":11,…}`。11 = C++14，**不是** 12。别名表见 `client.ts` 的 `LANGUAGES` |
+| `enableO2` 的取值（`0`/`1`） | **已验证** | 抓包 payload：`"enableO2":1`。浏览器 UI 默认**开着** |
+| 提交 body 就是 `{lang, code, enableO2}` 三个键 | **已验证** | `content-length: 151` 与该 JSON 的字节数逐字节吻合 → 没有隐藏字段、没有 csrf 域 |
+| 提交成功后返回 JSON `{rid}` | **已验证** | 2026-10-12 真机提交跑通；**不是** 302 跳 `/record/<rid>` |
+| `GET /record/list?user=<uid>&page=1` → `data.records.result[]` | **已验证** | 登录探活走的就是它（真机登录成功） |
+| **判定在 `record.status`（数字），不是 `judgeResult.verdict`** | **已验证** | 2026-10-12 真机提交跑通并显示判定。枚举取自站点 `/_lfe/config`。12=AC |
+| ⚠️ `detail.judgeResult.status` **不能**当判定 | **已核对** | 实测那份 AC 记录里它给的是 `0`（Waiting）—— 取它会把 AC 显示成「等待中」 |
+| `record.memory` 是 **KB**、`record.time` 是 **毫秒** | **已核对** | 与 `limits.memory` 同量纲；当字节算会差三个数量级 |
+| CE 报错在 `detail.compileResult.message` | **已核对** | `verdict === "CE"` 时提交域会把它弹出来。**还没拿 CE 提交验过** |
+
+> 上表「未核对」= 依据洛谷前端与公开文档推断、代码已按此实现，但**还没有真机证据**。
+> 「已验证」才是抓包或真机跑通的。首次真机跑通后请回来把对应行改成「已验证」。
+
+**2026-10-12 整条链路已在真机跑通**（抓 Cookie → 拉题面 → 提交 → 轮询判定，
+首次真机提交拿到 **AC**）。还留着的两类尾巴：
+
+- **CE 分支没验过** —— `detail.compileResult.message` 只在编译失败时才有内容，
+  拿 AC 提交验不到。第一次遇到 CE 时确认一下报错有没有正常弹出来。
+- **`record.memory` / `record.time` 的单位**是从一份第三方贴的响应推的（KB / 毫秒），
+  真机提交时若界面上的时间/内存数值合理，就顺手把那行改成「已验证」。
+
+交付前请勿改动下面这段已确认的事实（它们是这一轮反复核对出来的）：
+
+2026-10-12 已确认的（浏览器真机抓包）：请求体就是 `{lang, code, enableO2}` 三个键，
+`lang` 是数字 id（网页默认 **11 = C++14**，扩展的 `cpp` 别名也跟着它 —— **默认值刻意与网页一致**，
+这样「网页能过、扩展不行」时能立刻排除语言版本这个变量），`enableO2` 是 0/1（网页默认 **1 = 开**，
+扩展默认也跟着开，可通过 `lgAssist.submit.enableO2` 关），
+CSRF 只走头、body 里没有 csrf 域，`Origin` 与 `X-Requested-With: XMLHttpRequest` 必须手动补。
+
+**反爬挑战（C3VK）**：洛谷会先 302 跳回自身并下发 `Set-Cookie: C3VK=…; Max-Age=300; Path=/`，
+带上重试才放行，**而且每次放行都会再换一枚新的码**（2026-10-12 真机撞到并已实现，
+见 `client.ts` 的 `absorbChallenge` / `cookieHeader`）。**提交请求的 Cookie 里也带 C3VK**
+（抓包实测），所以 POST 同样受这条约束。
+
+这条有两个**很具体的坑**：
+
+1. `http.ts` 不跟随重定向，所以未处理的 302 会被 `envelopeFull` 当成「登录态过期」——
+   **报出来的是假原因**，用户会去重新粘 Cookie，而真正的问题是反爬挑战。
+   新增请求路径时记得走 `call()` / `html()`（里面已经处理了挑战），别自己直接调 `request()`。
+2. **POST 绝不能自动重试**。挑战是 302 自跳，看着无害，但提交接口有可能已经把记录建好、
+   自动重放就变成**两条重复提交**。所以 `retryChallenge` 只有 GET 能开；提交改为
+   「发之前先 GET 题目页把挑战码备好」（`csrfFor` 走的就是这条），真撞上就报给人手动再点。
+
+**还有一类坑：浏览器自动加、Node 不会替你补的头**。抓包洛谷的提交请求可见
+`Origin`、`X-Requested-With: XMLHttpRequest`、`Sec-Fetch-*` —— 前两个是鉴权相关的，
+走 Node 时必须**手动补上**（见 `submit()` 的 headers）。只看请求体和响应就动手改代码，
+很容易漏掉这一类。
 
 核对方法（与爱思创那版同一条路子）：浏览器 F12 看提交请求的表单域与响应；
 洛谷前端是打包后的 JS，可以直接搜调用点。**核对完请回来把结论补进这张表和
-`src/luogu/client.ts` 顶部的 TODO。**
+`src/luogu/client.ts` 顶部的注释。**
+
+**2026-10-12 这一轮的教训**：`?_contentOnly=1`、`currentData`、multipart 表单、
+302 跳 `/record/`、`lang: "cpp"`、`GET /user` 探活 —— **六条老假设里有六条是错的**，
+而且全都写在「已验证」那一栏里。所以这张表的「已验证」只表示**真机跑通过**，
+从文档或前端反推出来的一律标「已核对」。
+
+**怎么核对才有效**：不必等人登录。凡是**请求形状**类契约，站点的公开面基本都能查 ——
+`GET /_lfe/config` 给了全部枚举、`GET /_lfe/tags` 给了标签字典、公开接口带
+`x-lentille-request: content-only` 头就能读 JSON。实测下来只有 `/record/*`
+（未登录一律 401）和提交本身需要登录才能验。注意 `Invoke-WebRequest` 能拿到 200
+不代表 Node 能拿到 —— 挑战码是跟客户端相关的，**最终要用 `node` + 扩展自己的 `http.ts` 验**。
 
 已经定死、别改的两条：
 
 1. **只有拿到判定文本才算终局结果**（`isFinalJudgeResult`）。洛谷评测是异步的，刚提交完去查会拿到
    「评测中」那条中间记录 —— 它的状态字段已经不是「等待」，只看它就会把中间态当结果显示。
    宁可多等一轮，也不要显示错的判定。
-2. **判不出来就显示「未知」（`?`），不要猜**。`poll()` 只认 `judgeResult.verdict` 这一个文本字段，
-   拿不到就 `verdict: "?"`；不要引入没核对过的数字状态码映射表。
+2. **判不出来就显示「未知」（`?`），不要猜**。`verdictFromStatus()` 只认
+   `RECORD_STATUS` 表里核对过的数字码，不认识的码给 `?` **且不算终局**（继续等，
+   而不是把可能的中间态当结果报出去）；表里的值一条一条都有出处，别凭印象加。
+   （`RecordStatus` 枚举**已核对**：`-1` Unshown、`0` Waiting、`1` Judging 是中间态，
+   2=CE、3=OLE、4=MLE、5=TLE、6=WA、7=RE、11=UKE、12=AC、14=NAC。）
+
+**判定字段曾经踩过的坑**（2026-10-12 真机暴露）：早先照 `record.judgeResult.verdict` 读判定 ——
+那两层都不存在，`rawStatus` 永远是空串，于是**每一次提交都一路轮询到 120 秒超时**，
+界面上表现为「提交后等了很久没结果」。真实字段是 `record.status`（数字）。
+教训：**字段名要真机核对**，别照「看起来合理」的路径写；而且当时若没有那条诊断日志，
+这个错会一直表现为「网络慢」。
+
+已经定死、别改的两条：
 
 ## 架构约定
 
 - **站点访问一律走 `src/luogu/client.ts`**，不要在别处直接 `request()`：那里有串行节流
   （默认 ≥800ms，洛谷比一般 OJ 敏感）、统一的 `_contentOnly` 信封解析、以及登录态过期的统一转换。
 - **纯逻辑模块不许 `import 'vscode'`**：`src/util.ts`、`src/problems/statement.ts`、
-  `src/problems/uploadName.ts`、`src/luogu/multipart.ts`、`src/judge/diagnostics.ts`、
+  `src/problems/uploadName.ts`、`src/luogu/multipart.ts`、`src/luogu/contract.ts`、`src/judge/diagnostics.ts`、
   `src/ui/layout.ts`、`src/ui/theme.ts`、`src/whiteboard/model.ts`、`src/whiteboard/fontCss.ts`。
   它们被 `test/` 直接引用，混进 vscode 依赖会让单元测试整体跑不起来。文件头有相应注释。
+  （`src/luogu/client.ts` 因为经 `../config` 间接引到 vscode，**引不进单测** ——
+  所以站点契约的纯逻辑一律放 `src/luogu/contract.ts`，`client.ts` 再导出一次。）
 - **webview 侧的代码不许（直接或间接）引到 `vscode`**：`src/whiteboard/webview.ts` 由 esbuild 的
   **第二入口**打成浏览器 iife（`dist/whiteboard.js`，面板读文件内容内联进 HTML 走 nonce）。
   浏览器那次打包没有 `external: ["vscode"]`，一旦间接引到就会打包失败。它因此**不在主 tsconfig 里**，
@@ -91,6 +166,12 @@ npm run package     # typecheck + production build + smoke + vsce package
 ## 登录态的边界
 
 - 洛谷登录带验证码，扩展里**做不了自动登录，也没有静默重登**。唯一入口是「粘贴 Cookie」。
+- **粘进来的形状五花八门，一律用 `parseCookieInput` 归一化**：整条 `Cookie:` 请求头、
+  只有值、一段一段每行一条、F12 里折的行、等号带空格、多个堆一起带空行 —— 全要认。
+  少认一种就是「用户明明贴对了却登不进去」。
+- ⚠️ **判登录态看 `_uid` / `__client_id`，不看 `csrf_token`**。洛谷真实会话里**没有**
+  `csrf_token`（真机抓包 `Cookie: _uid=…; __client_id=…; C3VK=…`）。早期版本拿
+  `csrf_token` 当必要条件，等于登录永远走不通。CSRF 走的是**题目页**下发的令牌（`csrfFor`）。
 - **Cookie 只进 `SecretStorage`**，绝不写 `globalState` / `workspaceState` / 任何文件。
   `luogu/session.ts` 里探活失败要**连同密钥库里那份一起删掉**。
 - 题面、搜索以外的本地功能（编译、评测、白板、图片导出）**都不要求登录**。

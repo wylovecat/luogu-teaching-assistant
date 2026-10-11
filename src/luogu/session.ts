@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { output } from "../config";
-import { csrfFromCookie, LuoguClient, LuoguError, type LuoguSession } from "./client";
+import { csrfFromCookie, isLoggedInCookie, parseCookieInput } from "./contract";
+import { LuoguClient, LuoguError, type LuoguSession } from "./client";
 
 /**
  * 会话管理。
@@ -21,7 +22,12 @@ export class SessionManager {
   readonly onDidChange = this.emitter.event;
 
   constructor(private readonly secrets: vscode.SecretStorage) {
-    this.client = new LuoguClient({ onAuthExpired: () => this.onAuthExpired() });
+    this.client = new LuoguClient({
+      onAuthExpired: () => this.onAuthExpired(),
+      // 站点原文诊断走输出面板：`/record/<rid>` 只能靠一次真机提交核对，
+      // 打出来是核对它的唯一凭据
+      onDebug: (msg) => output.appendLine(msg),
+    });
   }
 
   get current(): LuoguSession | null {
@@ -43,7 +49,7 @@ export class SessionManager {
     if (!cookie) return false;
     const tentative = this.sessionOf(cookie);
     if (!tentative) {
-      output.appendLine("[登录] 存的 Cookie 里没有 csrf_token，已丢弃，请重新登录");
+      output.appendLine("[登录] 存的 Cookie 里没有 _uid / __client_id，已丢弃，请重新登录");
       await this.secrets.delete(COOKIE_KEY);
       return false;
     }
@@ -69,8 +75,9 @@ export class SessionManager {
     const tentative = this.sessionOf(cookie);
     if (!tentative) {
       throw new LuoguError(
-        "这段 Cookie 里没有 csrf_token。请在浏览器开发者工具的「网络」面板里选中任意一条请求，" +
-          "从请求头复制整段 Cookie（形如 `Cookie: _uid=…; csrf_token=…; …`）后重试。",
+        "这段 Cookie 里没找到 `_uid` 或 `__client_id`，不像洛谷的登录态。\n" +
+          "取法：浏览器登录洛谷后按 F12 →「网络」面板 → 点任意一条 luogu.com.cn 的请求 → " +
+          "「请求标头」里的 `Cookie:`。整段复制过来即可，**分段粘、换行、多个 Cookie 堆在一起都能认**。",
       );
     }
     // 先探活再落盘：探不通的 Cookie 不该留在密钥库里
@@ -100,9 +107,11 @@ export class SessionManager {
 
   /** 从 Cookie 串拼一个待验证的会话（uid/uname 先空着，探活后补）。 */
   private sessionOf(cookie: string): LuoguSession | null {
-    const csrfToken = csrfFromCookie(cookie);
-    if (!csrfToken) return null;
-    return { cookie: cookie.trim(), csrfToken, uid: 0, uname: "" };
+    // 用户粘来的 Cookie 形状五花八门（整条请求头 / 一段一段 / 带折行），
+    // 先归一化再往下走，别在「格式对不对」上把人挡在门外。
+    const { header } = parseCookieInput(cookie);
+    if (!isLoggedInCookie(header)) return null;
+    return { cookie: header, csrfToken: csrfFromCookie(header), uid: 0, uname: "" };
   }
 
   private async confirm(session: LuoguSession): Promise<LuoguSession> {

@@ -8,6 +8,7 @@
 import * as vscode from "vscode";
 import { luoguConfig, output } from "../config";
 import { LuoguError } from "../luogu/client";
+import { parseCookieInput } from "../luogu/contract";
 import type { AppDeps } from "./deps";
 
 /** 任何异常对象取可读文案（LuoguError 的文案通常是站点返回的业务错误）。 */
@@ -42,20 +43,29 @@ export async function login(deps: AppDeps): Promise<void> {
   await vscode.env.openExternal(vscode.Uri.parse(`${luoguConfig().baseUrl}/auth/login`));
   const go = await vscode.window.showInformationMessage(
     "已打开洛谷登录页。请在浏览器里登录成功，然后回到这里把浏览器的 Cookie 粘贴进来。",
-    { modal: true, detail: "取 Cookie：浏览器按 F12 打开开发者工具 →「网络」面板 → 刷新页面 → 点任意一条请求 →「请求标头」里的 `Cookie:` 那一行，整行复制（值，不带 `Cookie:` 这个词）。" },
+    {
+      modal: true,
+      detail:
+        "取 Cookie：浏览器按 F12 →「网络」面板 → 刷新 → 点任意一条 luogu.com.cn 的请求 →\n" +
+        "「请求标头」里的 `Cookie:` 那一行，整行复制（值就行，不带 `Cookie:` 这个词）。\n\n" +
+        "分段粘、换行、多个 Cookie 堆在一起都能认，扩展会自己拼。",
+    },
     "粘贴 Cookie",
   );
   if (go !== "粘贴 Cookie") return;
 
   const cookie = await vscode.window.showInputBox({
     title: "登录洛谷",
-    prompt: "粘贴浏览器里的整段 Cookie",
-    placeHolder: "_uid=123456; csrf_token=abcdef; …",
+    prompt: "粘贴浏览器里的 Cookie（整段或一段一段都行）",
+    placeHolder: "_uid=123456\n__client_id=abcdef…\nC3VK=xxxxxx",
     ignoreFocusOut: true,
     validateInput: (v) => {
-      const t = v.trim();
-      if (!t) return "Cookie 不能为空";
-      if (!t.includes("=")) return "这不像一段 Cookie，应该形如 `key=value; key=value`";
+      const { pairs, header } = parseCookieInput(v);
+      if (header === "") return "没解析出任何 Cookie 项，应该形如 `_uid=123456` 这样的「名字=值」";
+      if (!pairs._uid && !pairs.__client_id) {
+        const got = Object.keys(pairs).slice(0, 6).join(" / ");
+        return `这段 Cookie 里没有 _uid 或 __client_id（读到的是：${got}），不像洛谷的登录态`;
+      }
       return undefined;
     },
   });

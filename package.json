@@ -2,7 +2,7 @@
   "name": "luogu-teaching-assistant",
   "displayName": "洛谷教学助手",
   "description": "信息学奥赛教学助手：单文件一键编译运行、洛谷抓题建题与样例评测、提交代码、题面白板批注、代码转图片。",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "publisher": "lgassist",
   "license": "MIT",
   "engines": {
@@ -128,7 +128,48 @@
         "lgAssist.submit.language": {
           "type": "string",
           "default": "cpp",
-          "description": "提交使用的语言标识（洛谷提交表单的 lang 取值，如 cpp / gcc）。以站点提交框里的实际选项为准。"
+          "enum": [
+            "cpp",
+            "cpp98",
+            "cpp11",
+            "cpp14",
+            "cpp14gcc9",
+            "cpp17",
+            "cpp20",
+            "cpp23",
+            "c",
+            "pascal",
+            "python3",
+            "pypy3",
+            "java8",
+            "java21",
+            "rust",
+            "go"
+          ],
+          "enumDescriptions": [
+            "C++14（默认，id 11 —— 与洛谷网页提交框的默认值一致）",
+            "C++98（id 3）",
+            "C++11（id 4）",
+            "C++14（id 11）",
+            "C++14 (GCC 9)（id 28）",
+            "C++17（id 12）",
+            "C++20（id 27）",
+            "C++23（id 34）",
+            "C（id 2）",
+            "Pascal（id 1）",
+            "Python 3（id 7）",
+            "PyPy 3（id 25）",
+            "Java 8（id 8）",
+            "Java 21（id 33）",
+            "Rust（id 15）",
+            "Go（id 14）"
+          ],
+          "description": "提交到洛谷时使用的语言。洛谷提交接口的 lang 是**数字 id**（不是 cpp 这种字符串），这里填的是人话别名，扩展会查表换成 id；也可以直接填数字（如 34 = C++23）。别名与 id 取自站点自己的 GET /_lfe/config（CodeLanguage 枚举），默认值与洛谷网页提交框一致（网页默认 lang=11 = C++14）。"
+        },
+        "lgAssist.submit.enableO2": {
+          "type": "boolean",
+          "default": true,
+          "description": "提交时是否开启 O2 优化（对应请求体的 enableO2）。默认与洛谷网页一致（开）。关掉能少一类「本地能过、洛谷不过」的讲评难题 —— O2 偶尔会改变未定义行为的实际表现。"
         },
         "lgAssist.submit.compileFirst": {
           "type": "boolean",

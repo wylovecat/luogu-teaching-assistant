@@ -17,6 +17,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { output, submitConfig } from "../config";
 import type { LuoguResult } from "../luogu/client";
+import { resolveLangId } from "../luogu/contract";
 import { compile } from "../judge/compile";
 import { firstDiagnosticText, summarizeDiagnostics } from "../judge/diagnostics";
 import { publishCompileResult } from "../judge/problems";
@@ -109,8 +110,13 @@ export class SubmitController extends Controller {
       const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: `正在提交到 ${target}…`, cancellable: true },
         async (progress, token) => {
-          rid = await this.session.client.submit(ref.displayId, code, cfg.language);
-          output.appendLine(`[提交] ${target} record=${rid} lang=${cfg.language}`);
+          rid = await this.session.client.submit(ref.displayId, code, cfg.language, cfg.enableO2);
+          // 语言与 O2 一起打进日志：真机跑通时，「提交被判语言不符/O2 相关怪现象」
+          // 回头看这一行就能确认，不用再去翻设置。
+          output.appendLine(
+            `[提交] ${target} record=${rid} lang=${cfg.language}(id=${resolveLangId(cfg.language)})` +
+              ` O2=${cfg.enableO2 ? "开" : "关"}`,
+          );
           return this.pollResult(rid, progress, token);
         },
       );
@@ -166,6 +172,13 @@ export class SubmitController extends Controller {
         // 站点说「结束了」，但记录里还没有判定文本 —— 这是还没写回的中间态，
         // 直接报出去就是错判。继续等下一轮。
         output.appendLine(`[评测] 记录还没有最终判定（verdict=${res.rawStatus || "(空)"}），继续等待…`);
+      } else if (waited === 0) {
+        // 第一轮就没读到判定：把「读到什么」说明白。
+        // 判定在 `record.status`（数字）；这一行是定位它的线索（配合上一条「诊断」）。
+        output.appendLine(
+          `[评测] 记录还没有终局判定（读到 status=${res.rawStatus || "(空)"}）——` +
+            "若 status 不是已知的数字码，请看上一条「诊断」里的字段名。",
+        );
       }
       waited += pollIntervalMs;
       progress.report({ message: `评测中… 已等待 ${Math.round(waited / 1000)} 秒` });

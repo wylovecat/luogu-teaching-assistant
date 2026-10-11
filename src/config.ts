@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { DEFAULT_ENABLE_O2 } from "./luogu/contract";
 import { DEFAULT_EXPORT_DPI, clampExportDpi } from "./whiteboard/model";
 
 function cfg() {
@@ -30,8 +31,17 @@ export interface ProblemsConfig {
 }
 
 export interface SubmitConfig {
-  /** 洛谷提交表单的 lang 取值（cpp / gcc / cf…），以站点提交框实际选项为准 */
+  /**
+   * 提交语言。可以填人话别名（`cpp` / `python3` / …，见 client.ts 的 `LANGUAGES`），
+   * 也可以直接填洛谷的数字语言 id（`"34"` = C++23）。提交前由 `resolveLangId` 换算。
+   * 别名表抄自站点自己的 `GET /_lfe/config`（CodeLanguage 枚举）。
+   */
   language: string;
+  /**
+   * 提交时是否开 O2 优化。默认跟洛谷网页一致（开）—— 2026-10-12 真机抓包是
+   * `"enableO2":1`。关掉少一类「本地能过、洛谷不过」的讲评难题。
+   */
+  enableO2: boolean;
   compileFirst: boolean;
   pollIntervalMs: number;
   pollTimeoutMs: number;
@@ -93,6 +103,7 @@ export function submitConfig(): SubmitConfig {
   const c = cfg();
   return {
     language: c.get<string>("submit.language", "cpp"),
+    enableO2: c.get<boolean>("submit.enableO2", DEFAULT_ENABLE_O2),
     compileFirst: c.get<boolean>("submit.compileFirst", true),
     pollIntervalMs: c.get<number>("submit.pollIntervalMs", 2000),
     pollTimeoutMs: c.get<number>("submit.pollTimeoutMs", 120000),

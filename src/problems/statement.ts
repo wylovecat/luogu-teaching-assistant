@@ -1,11 +1,24 @@
 /**
- * 题面字段抽取：把洛谷 `/problem/<pid>?_contentOnly=1` 的返回统一成同一个结构。
+ * 题面字段抽取：把洛谷 `/problem/<pid>`（配 `x-lentille-request: content-only`）的
+ * `data.problem` 统一成同一个结构。
  *
  * 纯函数，无 vscode 依赖，便于测试（test/statement.test.ts 直接引用本文件）。
  *
- * ⚠️ 字段名与单位以真机实测为准，别凭直觉改：
- *  - `memoryLimit` 是**字节**（125MB = 131072000），不是 MB —— 直接显示会差三个数量级。
- *  - `timeLimit` 是**毫秒**，可直接用。
+ * ⚠️ 字段名与单位以真机实测为准，别凭直觉改（2026-10-12 对着 P1000 的真实返回核过一遍）：
+ *
+ *  **新形态（Lentille，当前站点）** —— 字段散在 `content` 子对象与 `limits` 里，
+ *  顶层并没有 `title` / `description` / `memoryLimit` 这些平铺字段：
+ *  - 标题是 `name`（顶层 `title` 存在但是**空串**，只认 title 会得到空标题）；
+ *  - 正文在 `content`：`background` / `description` / `formatI` / `formatO` / `hint`
+ *    （注意是 `formatI`/`formatO`，不是 `inputFormat`/`outputFormat`）；
+ *  - 时空限制在 `limits`：`time` 是**毫秒**、`memory` 是 **KB**（都是数组，取最大值）。
+ *    128MB 的题给 `memory: [131072]` —— 按字节算会变成 0.1MB，差三个数量级。
+ *  - 样例是 `[[输入, 输出], …]` 的**元组数组**，不是 `{input, output}` 对象。
+ *
+ *  **旧形态**（站点迁移前的平铺字段）仍一并收着：老测试用例、老缓存都还是它，
+ *  别把兼容分支删了。
+ *
+ *  - 旧形态的 `memoryLimit` 是**字节**、`timeLimit` 是**毫秒**。
  *  - `difficulty` 洛谷在不同版本里给过数字（0~7）与字符串两种，这里都收，
  *    数字按洛谷的「入门/普及-/普及/提高+/省选- …」序列取标签。
  */
@@ -44,6 +57,23 @@ function num(v: unknown): number | null {
   return null;
 }
 
+function rec(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+/**
+ * 时空限制给的是**数组**（每个数据点一份），界面上要显示一个数，取最大值。
+ */
+function maxOf(v: unknown): number | null {
+  const list = Array.isArray(v) ? v : [v];
+  let best: number | null = null;
+  for (const item of list) {
+    const n = num(item);
+    if (n !== null && (best === null || n > best)) best = n;
+  }
+  return best;
+}
+
 /**
  * 洛谷难度标签。0~7 的序列是洛谷站点的约定（题单筛选栏按它分档）。
  * 站点若改成给字符串，就直接用它的字符串。
@@ -69,6 +99,14 @@ export function pickSamples(raw: unknown): Sample[] {
   if (!Array.isArray(raw)) return [];
   const out: Sample[] = [];
   for (const item of raw) {
+    // 新形态是 `[输入, 输出]` 的元组：元组直接按位置取
+    if (Array.isArray(item)) {
+      const input = str(item[0]);
+      const output = str(item[1]);
+      if (input === "" && output === "") continue;
+      out.push({ input, output });
+      continue;
+    }
     if (!item || typeof item !== "object") continue;
     const o = item as Record<string, unknown>;
     const input = str(o.input);
@@ -81,7 +119,7 @@ export function pickSamples(raw: unknown): Sample[] {
 }
 
 /**
- * 由 `GET /problem/<pid>?_contentOnly=1` 的 `currentData.problem` 组装。
+ * 由 `GET /problem/<pid>` 的 `data.problem` 组装（新旧两种字段形态都收）。
  *
  * 洛谷没有「整篇 markdown」这个字段，rawMarkdown 一律留空 ——
  * 题面渲染与白板那张纸都会退回按结构化字段拼（statementToMarkdown / statementToSource）。
@@ -90,23 +128,41 @@ export function statementFromLuogu(
   problem: Record<string, unknown>,
   fallback: { displayId: string; title: string },
 ): Statement {
-  // 洛谷的 memoryLimit 是字节，统一换算成 MB
-  const memoryBytes = num(problem.memoryLimit ?? problem.memory_limit);
+  const content = rec(problem.content);
+  const limits = rec(problem.limits);
   // 难度既可能是数字也可能是字符串（站点版本差异）
   const rawDifficulty = problem.difficulty;
   const difficulty = typeof rawDifficulty === "number" ? rawDifficulty : num(rawDifficulty);
 
+  // 新形态 limits.memory 是 **KB**、limits.time 是毫秒；旧形态 timeLimit/memoryLimit
+  // 是平铺的毫秒/字节。两个来源的量纲不同，所以分开换算，别合并成一条路径。
+  const limitsTime = maxOf(limits.time);
+  const limitsMemoryKb = maxOf(limits.memory);
+  const legacyTime = num(problem.timeLimit ?? problem.time_limit);
+  const legacyMemoryBytes = num(problem.memoryLimit ?? problem.memory_limit);
+
   return {
     displayId: str(problem.pid) || fallback.displayId,
-    title: str(problem.title) || fallback.title,
-    description: str(problem.description),
-    inputDescription: str(problem.inputFormat ?? problem.input_format),
-    outputDescription: str(problem.outputFormat ?? problem.output_format),
+    // 标题在新接口里叫 `name`；顶层 `title` 存在但是空串，所以 name 在前
+    title: str(problem.name) || str(problem.title) || fallback.title,
+    description: str(content.description) || str(problem.description),
+    inputDescription:
+      str(content.formatI) || str(problem.inputFormat) || str(problem.input_format),
+    outputDescription:
+      str(content.formatO) || str(problem.outputFormat) || str(problem.output_format),
     samples: pickSamples(problem.samples),
-    hint: str(problem.hint),
-    prompt: str(problem.prompt ?? problem.background ?? problem.conclusion),
-    timeLimitMs: num(problem.timeLimit ?? problem.time_limit),
-    memoryLimitMb: memoryBytes === null ? null : Math.round(memoryBytes / 1024 / 1024),
+    hint: str(content.hint) || str(problem.hint),
+    prompt:
+      str(content.background) ||
+      str(problem.background) ||
+      str(problem.prompt ?? problem.conclusion),
+    timeLimitMs: limitsTime ?? legacyTime,
+    memoryLimitMb:
+      limitsMemoryKb !== null
+        ? Math.round(limitsMemoryKb / 1024)
+        : legacyMemoryBytes === null
+          ? null
+          : Math.round(legacyMemoryBytes / 1024 / 1024),
     difficulty,
     rawMarkdown: "",
   };
