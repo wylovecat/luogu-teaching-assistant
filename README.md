@@ -5,7 +5,7 @@
 
 纯 TypeScript，esbuild 打包，无原生模块，一个 `.vsix` 通吃 Linux / macOS / Windows。
 
-> 本项目从 [oi-teaching-assistant](https://github.com/) 拆出：白板 / 评测 / 图片导出 / 题面渲染那一整层是
+> 本项目从 OI教学助手（`oi-teaching-assistant`）拆出：白板 / 评测 / 图片导出 / 题面渲染那一整层是
 > 站点无关的通用层，直接搬了过来；站点协议层换成了洛谷。爱思创那版（`oi-teaching-assistant`）**继续独立维护**，
 > 两个扩展可以同时装，各用各的命名空间（`lgAssist.` / `oiAssist.`）。
 
