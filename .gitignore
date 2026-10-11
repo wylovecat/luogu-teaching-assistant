@@ -1,0 +1,9 @@
+node_modules/
+out/
+dist/
+test-dist/
+*.vsix
+.DS_Store
+# 界面设计稿预览页：只用来在浏览器里对比深浅主题，不属于产品。
+# 这条同时管住 vsce 的打包过滤（它读 .gitignore）—— 不加的话 preview.html 会被打进 .vsix。
+preview/

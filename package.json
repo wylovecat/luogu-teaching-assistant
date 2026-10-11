@@ -1,0 +1,363 @@
+{
+  "name": "luogu-teaching-assistant",
+  "displayName": "洛谷教学助手",
+  "description": "信息学奥赛教学助手：单文件一键编译运行、洛谷抓题建题与样例评测、提交代码、题面白板批注、代码转图片。",
+  "version": "0.1.0",
+  "publisher": "lgassist",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Education",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "OI",
+    "竞赛",
+    "信息学奥赛",
+    "C++",
+    "洛谷",
+    "luogu",
+    "题库"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onLanguage:cpp",
+    "onLanguage:c",
+    "onView:lgAssist.sidebar"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "洛谷教学助手",
+      "properties": {
+        "lgAssist.compile.command": {
+          "type": "string",
+          "default": "g++",
+          "description": "编译器命令。Windows 上 g++ 不在 PATH 里时可填完整路径，例如 C:\\msys64\\mingw64\\bin\\g++.exe。"
+        },
+        "lgAssist.compile.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "-O2",
+            "-std=c++17",
+            "-pipe",
+            "-Wall"
+          ],
+          "description": "编译参数。会追加 -o 与源文件路径。"
+        },
+        "lgAssist.terminal.mode": {
+          "type": "string",
+          "enum": [
+            "integrated",
+            "external"
+          ],
+          "enumDescriptions": [
+            "在 VSCode 集成终端中运行",
+            "在外部终端中运行（Linux/macOS 如 gnome-terminal；Windows 新开 cmd 控制台窗口）"
+          ],
+          "default": "integrated",
+          "description": "一键编译运行（F6）时使用的终端类型。"
+        },
+        "lgAssist.terminal.externalCommand": {
+          "type": "string",
+          "default": "",
+          "description": "外置终端启动命令模板，留空则自动选择（Linux/macOS 探测已有终端，Windows 用 cmd 的 start 新开窗口）。可用占位符 ${exe}（可执行文件路径）、${dir}（文件所在目录）、${file}（源文件路径）；替换时会按平台自动加引号，模板里不要再包一层引号。Linux/macOS 例：gnome-terminal -- bash -lc 'cd ${dir} && ${exe}'; Windows 例（cmd 语法）：wt -d ${dir} cmd /k ${exe}"
+        },
+        "lgAssist.terminal.keepOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "程序运行结束后保留终端窗口，便于查看输出。"
+        },
+        "lgAssist.terminal.clearBeforeRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "运行前清屏。"
+        },
+        "lgAssist.judge.timeoutMs": {
+          "type": "number",
+          "default": 10000,
+          "description": "单个样例运行的时间限制（毫秒），超时判为 TLE。"
+        },
+        "lgAssist.judge.maxOutputBytes": {
+          "type": "number",
+          "default": 16777216,
+          "description": "单个样例输出上限（字节），超出后截断。"
+        },
+        "lgAssist.problems.bankDir": {
+          "type": "string",
+          "default": "题库",
+          "description": "创建题目文件的目录（相对工作区根）。"
+        },
+        "lgAssist.problems.saveStatementAsMd": {
+          "type": "boolean",
+          "default": true,
+          "description": "创建题目时把题面保存为同目录下的 <题号>.md 文件。"
+        },
+        "lgAssist.problems.codeTemplate": {
+          "type": "string",
+          "default": "#include <bits/stdc++.h>\nusing namespace std;\n\nint main() {\n\n  return 0;\n}\n",
+          "description": "新建题目源文件的初始代码模板。建议缩进与你的 editor.tabSize 一致：模板内容会让 VSCode 的缩进探测（editor.detectIndentation，默认开）猜出新建文件的 tabSize，不一致时状态栏显示的缩进就不是你设的值。"
+        },
+        "lgAssist.problems.openStatement": {
+          "type": "string",
+          "enum": [
+            "webview",
+            "markdown",
+            "none"
+          ],
+          "enumDescriptions": [
+            "在内置面板中渲染（支持公式）",
+            "打开保存的 .md 文件预览",
+            "不自动打开"
+          ],
+          "default": "webview",
+          "description": "创建题目后自动打开题面的方式。"
+        },
+        "lgAssist.whiteboard.exportDpi": {
+          "type": "number",
+          "default": 150,
+          "minimum": 72,
+          "maximum": 600,
+          "description": "白板与知识面板「导出 A4 PNG」的分辨率（dpi）。默认 150（A4 → 1240×1754），当讲义发群里够用、体积约为 300dpi 的四分之一；要打印精细件可改成 300（A4 → 2480×3508）。"
+        },
+        "lgAssist.submit.language": {
+          "type": "string",
+          "default": "cpp",
+          "description": "提交使用的语言标识（洛谷提交表单的 lang 取值，如 cpp / gcc）。以站点提交框里的实际选项为准。"
+        },
+        "lgAssist.submit.compileFirst": {
+          "type": "boolean",
+          "default": true,
+          "description": "提交前先本地编译，编译不通过则不提交。"
+        },
+        "lgAssist.submit.pollIntervalMs": {
+          "type": "number",
+          "default": 2000,
+          "description": "提交后查询评测结果的间隔（毫秒）。"
+        },
+        "lgAssist.submit.pollTimeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "description": "提交后等待评测结果的最长时间（毫秒）。"
+        },
+        "lgAssist.luogu.baseUrl": {
+          "type": "string",
+          "default": "https://www.luogu.com.cn",
+          "description": "洛谷站点根地址。"
+        },
+        "lgAssist.luogu.requestIntervalMs": {
+          "type": "number",
+          "default": 800,
+          "description": "两次站点请求之间的最小间隔（毫秒），串行节流。洛谷有频控，调小有被风控的风险。"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "lgAssist.compileRun",
+        "category": "洛谷助手",
+        "title": "编译并运行当前文件",
+        "icon": "$(play)"
+      },
+      {
+        "command": "lgAssist.runSamples",
+        "category": "洛谷助手",
+        "title": "编译并用样例评测当前文件",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "lgAssist.login",
+        "category": "洛谷助手",
+        "title": "登录洛谷账号（粘贴 Cookie）",
+        "icon": "$(account)"
+      },
+      {
+        "command": "lgAssist.logout",
+        "category": "洛谷助手",
+        "title": "退出洛谷登录"
+      },
+      {
+        "command": "lgAssist.searchAndCreate",
+        "category": "洛谷助手",
+        "title": "搜索洛谷题目并创建文件"
+      },
+      {
+        "command": "lgAssist.createFromProblem",
+        "category": "洛谷助手",
+        "title": "按题号创建文件"
+      },
+      {
+        "command": "lgAssist.openProblemById",
+        "category": "洛谷助手",
+        "title": "打开题号对应的题面"
+      },
+      {
+        "command": "lgAssist.clearRecents",
+        "category": "洛谷助手",
+        "title": "清空最近题目"
+      },
+      {
+        "command": "lgAssist.showCurrentFileHelp",
+        "category": "洛谷助手",
+        "title": "当前文件关联说明"
+      },
+      {
+        "command": "lgAssist.openStatement",
+        "category": "洛谷助手",
+        "title": "打开当前题目的题面",
+        "icon": "$(book)"
+      },
+      {
+        "command": "lgAssist.submit",
+        "category": "洛谷助手",
+        "title": "提交当前文件到洛谷",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "lgAssist.openWhiteboard",
+        "category": "洛谷助手",
+        "title": "打开题面白板（批注）",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "lgAssist.openKnowledgeBoard",
+        "category": "洛谷助手",
+        "title": "打开知识面板（空白讲解）",
+        "icon": "$(lightbulb)"
+      },
+      {
+        "command": "lgAssist.exportImage",
+        "category": "洛谷助手",
+        "title": "导出当前文件为图片",
+        "icon": "$(file-media)"
+      },
+      {
+        "command": "lgAssist.refresh",
+        "category": "洛谷助手",
+        "title": "刷新侧边栏",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "lgAssist.compileRun",
+          "when": "resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c",
+          "group": "navigation@1"
+        },
+        {
+          "command": "lgAssist.runSamples",
+          "when": "resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c",
+          "group": "navigation@2"
+        },
+        {
+          "command": "lgAssist.submit",
+          "when": "resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c",
+          "group": "navigation@3"
+        },
+        {
+          "command": "lgAssist.exportImage",
+          "when": "resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c",
+          "group": "navigation@4"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "lgAssist.exportImage",
+          "when": "resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c",
+          "group": "lgassist@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "lgAssist.refresh",
+          "when": "view == lgAssist.sidebar",
+          "group": "navigation@1"
+        },
+        {
+          "command": "lgAssist.login",
+          "when": "view == lgAssist.sidebar",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "lgAssist.openProblemById",
+          "when": "false"
+        },
+        {
+          "command": "lgAssist.showCurrentFileHelp",
+          "when": "false"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "lgAssist.compileRun",
+        "key": "f6",
+        "when": "editorTextFocus && (resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c)"
+      },
+      {
+        "command": "lgAssist.runSamples",
+        "key": "ctrl+f6",
+        "when": "editorTextFocus && (resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c)"
+      },
+      {
+        "command": "lgAssist.submit",
+        "key": "ctrl+alt+s",
+        "when": "editorTextFocus && (resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c)"
+      },
+      {
+        "command": "lgAssist.exportImage",
+        "key": "ctrl+alt+p",
+        "when": "editorTextFocus && (resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "lgAssist",
+          "title": "洛谷教学助手",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "lgAssist": [
+        {
+          "id": "lgAssist.sidebar",
+          "name": "题目与账号",
+          "icon": "media/icon.svg"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p ./ && tsc --noEmit -p tsconfig.webview.json",
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "test": "node esbuild.test.js && node --test test-dist/*.test.js",
+    "test:smoke": "node esbuild.js --production && node test/smoke-activate.cjs",
+    "verify": "npm run typecheck && npm test && npm run test:smoke",
+    "package": "npm run typecheck && node esbuild.js --production && node test/smoke-activate.cjs && vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "highlight.js": "^11.10.0",
+    "katex": "^0.16.11",
+    "markdown-it": "^14.1.0",
+    "perfect-freehand": "^1.2.3"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "^14.1.2",
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.1.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}
