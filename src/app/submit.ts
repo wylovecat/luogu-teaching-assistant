@@ -134,6 +134,13 @@ export class SubmitController extends Controller {
         if (result.verdict === "CE") output.show(true);
       }
 
+      // 拿到 AC 就把这份代码快照进题解（快照而非引用源文件：
+      // 之后继续改代码做变体，题解里留的仍是「当时 AC 的那份」）。
+      // 写完后才弹通知 —— 这样「查看评测记录」按钮出来时题解已经更新好了。
+      if (result.verdict === "AC") {
+        await this.host.writeBanshuCode(ref.displayId, code);
+      }
+
       const action = await vscode.window.showInformationMessage(`${target}：${summary}`, "查看评测记录");
       if (action === "查看评测记录") {
         await vscode.env.openExternal(vscode.Uri.parse(`https://www.luogu.com.cn/record/${rid}`));

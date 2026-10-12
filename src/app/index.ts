@@ -11,6 +11,7 @@
  * | `board` | 题面批注白板、知识面板 |
  * | `submit` | 提交到洛谷、轮询评测结果 |
  * | `imageExport` | 代码导出 PNG |
+ * | `banshu` | 题解板书：生成 Typst 文档、插板书图与 AC 代码、导出 PDF |
  *
  * App 同时充当控制器的 `PeerHost`：控制器之间不直接互相 import，跨域调用都回到这里
  * （见 base.ts）。新增一个域就是加一个控制器 + 在这里挂一个方法。
@@ -21,6 +22,7 @@ import type { JudgeReport } from "../judge/judge";
 import type { Statement } from "../problems/statement";
 import { type PeerHost, refreshCurrentRef } from "./base";
 import { type AppDeps } from "./deps";
+import { BanshuController } from "./banshu";
 import { BoardController } from "./board";
 import { ImageExportController } from "./imageExport";
 import { JudgeController } from "./judge";
@@ -34,6 +36,7 @@ export class App implements PeerHost {
   private readonly boardCtl: BoardController;
   private readonly submitCtl: SubmitController;
   private readonly imagesCtl: ImageExportController;
+  private readonly banshuCtl: BanshuController;
 
   constructor(private readonly deps: AppDeps) {
     // 控制器的构造只存引用、不会回调 host，所以传 this 是安全的
@@ -42,6 +45,7 @@ export class App implements PeerHost {
     this.boardCtl = new BoardController(deps, this);
     this.submitCtl = new SubmitController(deps, this);
     this.imagesCtl = new ImageExportController(deps, this);
+    this.banshuCtl = new BanshuController(deps, this);
   }
 
   // ── 登录 ──────────────────────────────────────────────────────
@@ -108,6 +112,28 @@ export class App implements PeerHost {
     return this.imagesCtl.exportImage(uri);
   }
 
+  // ── 题解板书 ──────────────────────────────────────────────────
+
+  /** 为当前文件生成/补齐题解文档并打开。 */
+  createBanshuDoc(): Promise<void> {
+    return this.banshuCtl.createDocForCurrent();
+  }
+
+  /** 把当前代码写进题解（不必等 AC）。 */
+  insertBanshuCode(): Promise<void> {
+    return this.banshuCtl.insertCurrentCode();
+  }
+
+  /** 编译题解成 PDF。 */
+  exportBanshuPdf(): Promise<void> {
+    return this.banshuCtl.exportPdf();
+  }
+
+  /** 写入/重建题库根目录里的共享版式。 */
+  writeBanshuConf(): Promise<void> {
+    return this.banshuCtl.writeSharedConf();
+  }
+
   // ── 其他 ──────────────────────────────────────────────────────
 
   async clearRecents(): Promise<void> {
@@ -139,5 +165,19 @@ export class App implements PeerHost {
   /** 建题流程（「按题号创建」与搜索建题共用）。 */
   createProblemFilesFlow(root: string, displayId: string): Promise<void> {
     return this.problemsCtl.createProblemFilesFlow(root, displayId);
+  }
+
+  // ── PeerHost：题解域（建题后 / AC 后 / 白板导出后） ────────────
+
+  ensureBanshuDoc(displayId: string, title: string): Promise<void> {
+    return this.banshuCtl.ensureDoc(displayId, title);
+  }
+
+  writeBanshuCode(displayId: string, code: string): Promise<void> {
+    return this.banshuCtl.snapshotAcCode(displayId, code);
+  }
+
+  insertBanshuImages(displayId: string, files: string[]): Promise<void> {
+    return this.banshuCtl.insertBoardImages(displayId, files);
   }
 }

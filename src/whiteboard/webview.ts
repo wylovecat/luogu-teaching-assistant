@@ -1182,7 +1182,7 @@ async function renderPage(pageIndex: number, prepared: { inner: string; cssXml: 
   return { dataUrl: out.toDataURL("image/png"), blank };
 }
 
-async function exportPages(): Promise<void> {
+async function exportPages(target?: "banshu"): Promise<void> {
   if (exporting) return;
   exporting = true;
   setStatus("正在准备导出…");
@@ -1203,7 +1203,8 @@ async function exportPages(): Promise<void> {
       images.push(page.dataUrl);
     }
     setStatus("");
-    vscode.postMessage({ command: "export", images, blank });
+    // target 只影响扩展侧落盘到哪：题解走固定命名、不弹保存框
+    vscode.postMessage({ command: "export", images, blank, target });
   } catch (e) {
     setStatus("");
     reportError(e);
@@ -1358,6 +1359,8 @@ function start(): void {
   document.getElementById("wb-add-page")?.addEventListener("click", addPage);
   document.getElementById("wb-del-page")?.addEventListener("click", removePage);
   document.getElementById("wb-export")?.addEventListener("click", () => void exportPages());
+// 「导出并插入题解」：落盘到题目录、固定命名，随后由扩展写进题解文档
+document.getElementById("wb-export-banshu")?.addEventListener("click", () => void exportPages("banshu"));
   eraserButton.addEventListener("click", () => setEraser(!eraserMode));
   zoomLabel.addEventListener("click", fitWidth);
   for (const btn of Array.from(document.querySelectorAll<HTMLButtonElement>(".wb-pen"))) {

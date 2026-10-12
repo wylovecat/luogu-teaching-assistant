@@ -133,6 +133,7 @@ CSRF 只走头、body 里没有 csrf 域，`Origin` 与 `X-Requested-With: XMLHt
   （默认 ≥800ms，洛谷比一般 OJ 敏感）、统一的 `_contentOnly` 信封解析、以及登录态过期的统一转换。
 - **纯逻辑模块不许 `import 'vscode'`**：`src/util.ts`、`src/problems/statement.ts`、
   `src/problems/uploadName.ts`、`src/luogu/multipart.ts`、`src/luogu/contract.ts`、`src/judge/diagnostics.ts`、
+  `src/banshu/template.ts`、`src/banshu/typst.ts`、
   `src/ui/layout.ts`、`src/ui/theme.ts`、`src/whiteboard/model.ts`、`src/whiteboard/fontCss.ts`。
   它们被 `test/` 直接引用，混进 vscode 依赖会让单元测试整体跑不起来。文件头有相应注释。
   （`src/luogu/client.ts` 因为经 `../config` 间接引到 vscode，**引不进单测** ——
@@ -203,6 +204,28 @@ CSRF 只走头、body 里没有 csrf 域，`Origin` 与 `X-Requested-With: XMLHt
   `clearCommand` / `exitSuffix`）都接受 `platform` 参数，测试要显式传，别依赖当前机器。
 - **别断言构建产物**（`dist/`、`test-dist/`）：`npm test` 跑在 build 之前，CI 上更是全新 checkout，
   断言产物必然又红又飘。断言源码与配置。
+
+## 题解板书（Typst，动这层前先读这两条坑）
+
+把一道题的**板书图 + AC 代码**整理成一页 Typst 题解并导出 PDF。落的目录是扩展自己的题目录
+（`<工作区>/<题目根目录>/<题号>/`），产物：`题解板书.typ`、`<题号> 板书.png`、
+`<题号>_AC.cpp`、`题解板书.pdf`；共享版式 `banshuconf.typ` 在题库根目录**一份**。
+
+- **跨目录 import 必须带 `--root`**：题解用 `#import "../banshuconf.typ"` 引共享版式，
+  而 Typst 默认把「被编译文件所在目录」当项目根，不带 `--root` 会直接报
+  `would escape the project root`（2026-10-12 实测）。编译时 `--root` 放宽到工作区。
+- ⚠️ **Typst 的 `read()` / `image()` 路径按「写这行字的那个文件」解析，不是按调用处**。
+  所以**别在 `banshuconf.typ` 里放 `codefile(path)` 这种「读同目录文件」的 helper** ——
+  它会去题库根找文件（实测报 `file not found (searched at <root>/x_AC.cpp)`）。
+  贴代码要在**题解文档里**直接写 `#raw(read("P1395_AC.cpp"), lang: "cpp", block: true)`。
+  `test/banshu.test.ts` 有两条测试专门守这个。
+
+扩展只替换 `// >>> lgAssist:image` / `// >>> lgAssist:code` 标记**之间**的内容，
+标记之外的（老师手写的说明）不会被自动写入碰掉 —— 改这两段逻辑时别把标记语义弄丢。
+
+模板**只放板书图 + 代码实现两块**，不预置「题意理解/思路/复杂度分析」那些小节
+（板书图里已讲完，正文重复没意义）。但常用组件 `note/tip/warn/chip/divider` 已经
+默认 import 好 —— 否则想临时加个 `#tip[...]` 会先撞一次 `unknown variable`。
 
 ## 平台注意
 

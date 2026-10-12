@@ -2,7 +2,7 @@
   "name": "luogu-teaching-assistant",
   "displayName": "洛谷教学助手",
   "description": "信息学奥赛教学助手：单文件一键编译运行、洛谷抓题建题与样例评测、提交代码、题面白板批注、代码转图片。",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "publisher": "lgassist",
   "license": "MIT",
   "engines": {
@@ -171,6 +171,36 @@
           "default": true,
           "description": "提交时是否开启 O2 优化（对应请求体的 enableO2）。默认与洛谷网页一致（开）。关掉能少一类「本地能过、洛谷不过」的讲评难题 —— O2 偶尔会改变未定义行为的实际表现。"
         },
+        "lgAssist.banshu.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "题解板书：建题时自动生成 Typst 题解文档（题解板书.typ），并在题库根目录放一份共享版式。关掉后白板工具栏也不再显示「导出并插入题解」。"
+        },
+        "lgAssist.banshu.confDir": {
+          "type": "string",
+          "default": "",
+          "description": "题解共享版式 banshuconf.typ 所在的目录。留空 = 题库根目录（即 <工作区>/<lgAssist.problems.bankDir>）。各题目录用 `#import \"../banshuconf.typ\"` 引它，所以编译时 typst 的 --root 会放宽到工作区。"
+        },
+        "lgAssist.banshu.author": {
+          "type": "string",
+          "default": "",
+          "description": "题解标题区显示的署名。留空则不显示署名栏（只留日期）。"
+        },
+        "lgAssist.banshu.course": {
+          "type": "string",
+          "default": "《深入浅出程序设计竞赛》题解",
+          "description": "题解眉行与页眉里的课程名。"
+        },
+        "lgAssist.banshu.typstPath": {
+          "type": "string",
+          "default": "typst",
+          "description": "typst 可执行文件。默认从 PATH 里找；装了但不在 PATH 时填完整路径（如 C:\\\\Users\\\\me\\\\scoop\\\\shims\\\\typst.exe）。"
+        },
+        "lgAssist.banshu.imageWidth": {
+          "type": "string",
+          "default": "89%",
+          "description": "板书图在题解里的宽度（Typst 长度表达式，如 89% 或 16cm）。多页会逐页按这个宽度插入。"
+        },
         "lgAssist.submit.compileFirst": {
           "type": "boolean",
           "default": true,
@@ -278,6 +308,30 @@
         "icon": "$(file-media)"
       },
       {
+        "command": "lgAssist.createBanshuDoc",
+        "category": "洛谷助手",
+        "title": "生成/打开题解板书",
+        "icon": "$(book)"
+      },
+      {
+        "command": "lgAssist.insertBanshuCode",
+        "category": "洛谷助手",
+        "title": "把当前代码写进题解",
+        "icon": "$(code)"
+      },
+      {
+        "command": "lgAssist.exportBanshuPdf",
+        "category": "洛谷助手",
+        "title": "导出题解 PDF",
+        "icon": "$(file-pdf)"
+      },
+      {
+        "command": "lgAssist.writeBanshuConf",
+        "category": "洛谷助手",
+        "title": "写入/重建题解共享版式",
+        "icon": "$(settings-gear)"
+      },
+      {
         "command": "lgAssist.refresh",
         "category": "洛谷助手",
         "title": "刷新侧边栏",
@@ -305,6 +359,16 @@
           "command": "lgAssist.exportImage",
           "when": "resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c",
           "group": "navigation@4"
+        },
+        {
+          "command": "lgAssist.createBanshuDoc",
+          "when": "resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c",
+          "group": "navigation@5"
+        },
+        {
+          "command": "lgAssist.exportBanshuPdf",
+          "when": "resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c",
+          "group": "navigation@6"
         }
       ],
       "explorer/context": [

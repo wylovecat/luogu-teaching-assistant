@@ -53,6 +53,8 @@ interface WebviewMessage {
   kind?: string;
   /** savePages：用户手动加出来的纸面页数 */
   pages?: number;
+  /** export：导出目标。`"banshu"` = 落进题目录并写进题解（不弹保存框） */
+  target?: string;
 }
 
 export interface WhiteboardOptions {
@@ -62,6 +64,14 @@ export interface WhiteboardOptions {
   onSaved?: (filePath: string) => void | Promise<void>;
   /** 导出分辨率（dpi，来自 `lgAssist.whiteboard.exportDpi`）；缺省用模型的默认档 */
   exportDpi?: number;
+  /**
+   * 「导出并插入题解」的目标：给了才会在工具栏上多出那个按钮。
+   * 走它时**不弹保存对话框**，直接按固定名写进题目录（`<base>.png` / `<base>-p2.png`），
+   * 好让题解文档能按约定文件名引用。
+   */
+  banshu?: { dir: string; base: string };
+  /** 已写进题解目录的回调（调用方据此把图写进 `题解板书.typ`）。 */
+  onBanshuSaved?: (files: string[]) => void | Promise<void>;
 }
 
 /**
@@ -216,7 +226,7 @@ class WhiteboardPanel {
         return;
       }
       case "export": {
-        await this.saveImages(msg.images ?? [], Boolean(msg.blank));
+        await this.saveImages(msg.images ?? [], Boolean(msg.blank), msg.target === "banshu");
         return;
       }
       case "notify": {
@@ -291,10 +301,22 @@ class WhiteboardPanel {
     return clampExportDpi(Number(this.opts.exportDpi));
   }
 
-  private async saveImages(images: string[], blank: boolean): Promise<void> {
+  /**
+   * 逐页写盘。
+   *
+   * `toBanshu` 为真时走「导出并插入题解」：不弹保存对话框，直接按固定命名写进题目录
+   * （`<base>.png` / `<base>-p2.png`…），随后回调让调用方把图写进题解文档 ——
+   * 题解里引用的是约定好的文件名，所以这里不能让人随便改路径。
+   */
+  private async saveImages(images: string[], blank: boolean, toBanshu = false): Promise<void> {
     if (!images.length) return;
     const base = this.content.fileStem;
-    if (images.length > 1) {
+    const banshu = toBanshu ? this.opts.banshu : undefined;
+    if (toBanshu && !banshu) {
+      void vscode.window.showWarningMessage("这个白板没有关联题目，无法导出到题解（先按题号建题再打开白板）。");
+      return;
+    }
+    if (images.length > 1 && !toBanshu) {
       const px = exportPixels(this.exportDpi());
       const go = await vscode.window.showWarningMessage(
         `这道题的白板共 ${images.length} 页，将导出为 ${images.length} 张 A4 图片（A4 ${this.exportDpi()}dpi，${px.width}×${px.height}）。`,
@@ -303,25 +325,45 @@ class WhiteboardPanel {
       );
       if (go !== "导出") return;
     }
-    const target = await vscode.window.showSaveDialog({
-      title: "导出白板图片（A4）",
-      defaultUri: vscode.Uri.file(path.join(defaultDir(this.opts.lastDir), images.length > 1 ? `${base}-p1.png` : `${base}.png`)),
-      filters: { "PNG 图片": ["png"] },
-    });
-    if (!target) return;
 
-    const dir = path.dirname(target.fsPath);
+    // 目标路径：题解走固定命名（不弹对话框），否则照旧让人选
+    let targetPath: string;
+    if (banshu) {
+      targetPath = path.join(banshu.dir, `${banshu.base}.png`);
+    } else {
+      const target = await vscode.window.showSaveDialog({
+        title: "导出白板图片（A4）",
+        defaultUri: vscode.Uri.file(
+          path.join(defaultDir(this.opts.lastDir), images.length > 1 ? `${base}-p1.png` : `${base}.png`),
+        ),
+        filters: { "PNG 图片": ["png"] },
+      });
+      if (!target) return;
+      targetPath = target.fsPath;
+    }
+
+    const dir = path.dirname(targetPath);
     const stem = path
-      .basename(target.fsPath)
+      .basename(targetPath)
       .replace(/\.png$/i, "")
       .replace(/-p\d+$/i, "");
     const written: string[] = [];
     images.forEach((dataUrl, i) => {
-      const file = i === 0 ? target.fsPath : path.join(dir, `${stem}-p${i + 1}.png`);
+      const file = i === 0 ? targetPath : path.join(dir, `${stem}-p${i + 1}.png`);
       fs.writeFileSync(file, Buffer.from(dataUrl.slice(dataUrl.indexOf(",") + 1), "base64"));
       written.push(file);
     });
-    await this.opts.onSaved?.(target.fsPath);
+    await this.opts.onSaved?.(targetPath);
+
+    if (banshu) {
+      // 题解那条路：交给调用方写入 `题解板书.typ`，这里只报结果
+      await this.opts.onBanshuSaved?.(written);
+      void vscode.window.showInformationMessage(
+        `已导出 ${written.length} 张板书图到题目录，并写进题解：${path.basename(written[0])}` +
+          (written.length > 1 ? ` 等 ${written.length} 个文件` : ""),
+      );
+      return;
+    }
 
     // 知识面板的纸本来就没内容，抽检到全白是正常的，别拿「题面没渲染出来」吓人
     const note = blank && !this.content.blankSheet ? "\n提示：题面可能没栅格化成功（导出的图片里或许只有批注）" : "";
@@ -330,7 +372,7 @@ class WhiteboardPanel {
       "在文件夹中显示",
       "复制路径",
     );
-    if (action === "在文件夹中显示") void vscode.commands.executeCommand("revealFileInOS", target);
+    if (action === "在文件夹中显示") void vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(targetPath));
     else if (action === "复制路径") void vscode.env.clipboard.writeText(written.join("\n"));
   }
 
@@ -362,6 +404,8 @@ class WhiteboardPanel {
       pages: this.savedPages(),
       exportWidth: px.width,
       exportHeight: px.height,
+      // 有题解目标才显示「导出并插入题解」按钮（知识面板没有题目，自然没有）
+      banshu: Boolean(this.opts.banshu),
       script: this.webviewScript(),
     });
   }

@@ -24,6 +24,12 @@ export interface PeerHost {
   createFromProblem(presetDisplayId?: string): Promise<void>;
   /** 建题域：拉题面 → 建文件 → 打开源文件 & 题面（「按题号创建」与搜索建题共用）。 */
   createProblemFilesFlow(root: string, displayId: string): Promise<void>;
+  /** 题解域：建题后生成/补齐题解文档（幂等，已存在不动）。 */
+  ensureBanshuDoc(displayId: string, title: string): Promise<void>;
+  /** 题解域：拿到 AC 后快照代码并写进题解。 */
+  writeBanshuCode(displayId: string, code: string): Promise<void>;
+  /** 题解域：白板导出到题目录后，把这几页图写进题解。 */
+  insertBanshuImages(displayId: string, files: string[]): Promise<void>;
 }
 
 /**
