@@ -6,7 +6,8 @@
 
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { whiteboardConfig } from "../config";
+import { banshuConfig, whiteboardConfig } from "../config";
+import { problemDir, workspaceRoot } from "../problems/files";
 import type { Statement } from "../problems/statement";
 import { stemOf } from "../util";
 import { showKnowledgeBoard, showWhiteboard, type WhiteboardOptions } from "../whiteboard/panel";
@@ -48,7 +49,7 @@ export class BoardController extends Controller {
 
   /** 白板的导出目录跟代码图片导出共用一份记忆（同一个「上次导出位置」）。 */
   openWhiteboardForStatement(statement: Statement): void {
-    showWhiteboard(this.context, statement, this.boardOptions());
+    showWhiteboard(this.context, statement, this.boardOptions(statement.displayId));
   }
 
   /**
@@ -59,14 +60,31 @@ export class BoardController extends Controller {
     showKnowledgeBoard(this.context, this.boardOptions());
   }
 
-  /** 两块白板共用同一份导出目录记忆（和代码图片导出也共用）。 */
-  private boardOptions(): WhiteboardOptions {
+  /**
+   * 两块白板共用同一份导出目录记忆（和代码图片导出也共用）。
+   *
+   * @param displayId 题面白板传题号 → 工具栏上会出现「导出并插入题解」，
+   *   图会按固定命名落进题目录并写进 `题解板书.typ`。知识面板不传（没有对应题目）。
+   */
+  private boardOptions(displayId?: string): WhiteboardOptions {
+    const root = workspaceRoot();
+    const cfg = banshuConfig();
+    // 只有「有题目 + 题解功能开着 + 有工作区」时才给题解导出入口，
+    // 否则按钮点了也没地方写，不如不显示
+    const banshu =
+      displayId && cfg.enabled && root
+        ? { dir: problemDir(root, displayId), base: `${displayId} 板书` }
+        : undefined;
     return {
       lastDir: this.context.globalState.get<string>(LAST_EXPORT_DIR_KEY),
       // 每次开面板现读一次设置：改了 lgAssist.whiteboard.exportDpi 重开面板就生效
       exportDpi: whiteboardConfig().exportDpi,
+      banshu,
       onSaved: async (saved) => {
         await this.context.globalState.update(LAST_EXPORT_DIR_KEY, path.dirname(saved));
+      },
+      onBanshuSaved: async (files) => {
+        if (displayId) await this.host.insertBanshuImages(displayId, files);
       },
     };
   }

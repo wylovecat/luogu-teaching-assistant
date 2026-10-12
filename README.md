@@ -69,8 +69,9 @@ npm run verify      # 上面三步串起来，本地交付前跑这个
 ```
 src/
   luogu/          站点层（唯一访问 www.luogu.com.cn 的地方）
-  app/            命令编排：judge / problems / board / submit / imageExport
+  app/            命令编排：judge / problems / board / submit / imageExport / banshu
   problems/       题面字段映射、文件关联、建题落盘
+  banshu/         题解板书：Typst 版式与文档模板、typst 编译调用
   whiteboard/     白板模型 + webview（手写笔批注、A4 导出）
   judge/          本地编译与样例评测
   terminal/       编译/运行的终端命令拼装

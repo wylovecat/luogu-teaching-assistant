@@ -136,6 +136,10 @@ export class ProblemsController extends Controller {
     await this.links.set(created.cppPath, ref);
     await this.sidebar.rememberProblem({ displayId: ref.displayId, title, difficulty: ref.difficulty ?? null });
 
+    // 题解板书：建题时就铺好模板（幂等，已有则不覆盖）。
+    // 放在打开文件之前 —— 出问题也只记日志，不该拦住主流程。
+    await this.host.ensureBanshuDoc(ref.displayId, title);
+
     // 布局：题面（面板或题面 md）先占左栏，源文件贴着它开到右侧
     const plan = planProblemDisplay({
       openMode: problemsConfig().openStatement,

@@ -26,6 +26,8 @@ export interface WhiteboardHtmlOptions {
   /** 导出像素尺寸（来自 `lgAssist.whiteboard.exportDpi`）；不传就用默认 150dpi 的尺寸 */
   exportWidth?: number;
   exportHeight?: number;
+  /** 要不要显示「导出并插入题解」按钮：只有关联了题目、且题解功能开着时才给 */
+  banshu?: boolean;
   /** 白板的 webview 脚本（dist/whiteboard.js 的内容） */
   script: string;
 }
@@ -187,6 +189,8 @@ const ICON_TRASH = `<path d="M3 6h18"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 
 const ICON_PAGE_PLUS = `<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/><path d="M12 18v-5"/><path d="M9.5 15.5h5"/>`;
 const ICON_PAGE_MINUS = `<path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/><path d="M9.5 15.5h5"/>`;
 const ICON_EXPORT = `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>`;
+// 「导出并插入题解」：翻开的书（题解/讲义），与上面那个纯下载箭头区分开
+const ICON_BANSHU = `<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>`;
 
 /**
  * 图标按钮。`tone = "primary"` 用于导出这类主操作（跟随 VSCode 主按钮配色），其余走 secondary。
@@ -242,6 +246,7 @@ export function buildWhiteboardHtml(opts: WhiteboardHtmlOptions): string {
   ${iconButton("wb-del-page", "减掉末尾那张 A4：只减空白页，题面占用的页减不掉，写了字的页要先擦掉", ICON_PAGE_MINUS)}
   <span class="wb-grow"></span>
   <button id="wb-zoom" class="secondary" title="点击恢复「适应页宽」">100%</button>
+  ${opts.banshu ? iconButton("wb-export-banshu", "导出板书到题目录并写进题解（不弹保存框；多页会按顺序全插进去）", ICON_BANSHU, "primary") : ""}
   ${iconButton("wb-export", "导出为 A4 大小的 PNG（分辨率见设置 lgAssist.whiteboard.exportDpi，默认 150dpi）", ICON_EXPORT, "primary")}
   <span id="wb-stats" class="wb-readout"></span>
   <span id="wb-pages" class="wb-readout"></span>

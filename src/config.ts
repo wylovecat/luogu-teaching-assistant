@@ -110,6 +110,33 @@ export function submitConfig(): SubmitConfig {
   };
 }
 
+export interface BanshuConfig {
+  /** 建题时是否自动生成 `题解板书.typ`（以及题库根目录的共享版式）。 */
+  enabled: boolean;
+  /** 共享版式所在目录；空串 = `<工作区>/<题目根目录>`。 */
+  confDir: string;
+  /** 题解里的署名；留空则标题区不显示署名栏。 */
+  author: string;
+  /** 题解眉行/页眉里的课程名。 */
+  course: string;
+  /** typst 可执行文件；不在 PATH 里时填完整路径。 */
+  typstPath: string;
+  /** 板书图在题解里的宽度（Typst 长度表达式）。 */
+  imageWidth: string;
+}
+
+export function banshuConfig(): BanshuConfig {
+  const c = cfg();
+  return {
+    enabled: c.get<boolean>("banshu.enabled", true),
+    confDir: c.get<string>("banshu.confDir", ""),
+    author: c.get<string>("banshu.author", ""),
+    course: c.get<string>("banshu.course", "《深入浅出程序设计竞赛》题解"),
+    typstPath: c.get<string>("banshu.typstPath", "typst"),
+    imageWidth: c.get<string>("banshu.imageWidth", "89%"),
+  };
+}
+
 export function luoguConfig(): LuoguConfig {
   const c = cfg();
   return {
