@@ -1,0 +1,32 @@
+name: CI
+
+# 只在 master 与 PR 上跑：`npm run verify` 就是本项目的交付门槛
+# （typecheck → 单元测试 → production build + 激活冒烟）。
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# 同一分支连续推送时，取消上一次还没跑完的（PR 上只关心最新那版）
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # 冒烟测试会真编真跑一份 C++（test/smoke-activate.cjs），
+      # ubuntu runner 自带 g++，所以不用额外装；缺了它这一步会直接红。
+      - name: 验证（typecheck + 单测 + 冒烟）
+        run: npm run verify
