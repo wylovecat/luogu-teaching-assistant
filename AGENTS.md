@@ -238,7 +238,13 @@ CSRF 只走头、body 里没有 csrf 域，`Origin` 与 `X-Requested-With: XMLHt
   Windows 上会带上当前盘符，`path.join("/tmp/x","a.cpp")` 得到的是 `\tmp\x\a.cpp`，必红。
 - 断言可执行文件名用 **`exeNameFor(stem)`**，不要写死有无 `.exe`。
 - 带平台分支的函数（`cacheRoot` / `exeNameFor` / `detectExternalTemplate` / `isCmdShell` /
-  `clearCommand` / `exitSuffix`）都接受 `platform` 参数，测试要显式传，别依赖当前机器。
+  `clearCommand` / `exitSuffix` / `sameFilePath`）都接受 `platform` 参数，测试要显式传，别依赖当前机器。
+- ⚠️ **`platform` 参数要同时管「大小写」与「路径解析语义」**（2026-10-25 踩过，差点把 CI 弄红）。
+  只让参数管大小写、解析仍用运行时的 `path.resolve` 的话：在 Windows 上 `C:\a\..\b` 会归一成
+  `C:\b`，可到了 Linux 上 `path.resolve` 把 `C:\a\..\b` 当成**一整个文件名**（POSIX 里反斜杠
+  不是分隔符），`..` 就不归一了 —— 同一条断言**本机过、ubuntu CI 红**。
+  所以这类函数要用 `path.win32.resolve` / `path.posix.resolve` 按平台选（`util.ts` 的
+  `sameFilePath` 就是这么写的）。CI 跑在 ubuntu 上，这类差异本地发现不了。
 - **别断言构建产物**（`dist/`、`test-dist/`）：`npm test` 跑在 build 之前，CI 上更是全新 checkout，
   断言产物必然又红又飘。断言源码与配置。
 
