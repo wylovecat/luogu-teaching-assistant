@@ -8,6 +8,11 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#242b34",
+    "theme": "dark"
+  },
   "categories": [
     "Education",
     "Programming Languages",
@@ -124,6 +129,25 @@
           "minimum": 72,
           "maximum": 600,
           "description": "白板与知识面板「导出 A4 PNG」的分辨率（dpi）。默认 150（A4 → 1240×1754），当讲义发群里够用、体积约为 300dpi 的四分之一；要打印精细件可改成 300（A4 → 2480×3508）。"
+        },
+        "lgAssist.whiteboard.stabilize": {
+          "type": "string",
+          "enum": ["off", "light", "medium", "strong"],
+          "enumDescriptions": [
+            "关闭（默认）：手写笔迹与不装这一层完全一致",
+            "轻：抹掉手抖与板子量化噪声，笔画拐角保持原样",
+            "中：滤波更强，慢写时线条更顺，笔尖会略微滞后",
+            "强：适合手抖明显或写大字，落墨滞后最明显"
+          ],
+          "default": "off",
+          "description": "笔迹稳定器强度。开着会抹掉手抖，代价是落墨比笔尖滞后约半个缓冲（写快了能看出来），且已写下的笔迹不会被重新处理。默认关闭 —— 改了要重开白板面板才生效。"
+        },
+        "lgAssist.imageExport.fontSize": {
+          "type": "number",
+          "default": 14,
+          "minimum": 8,
+          "maximum": 32,
+          "description": "代码图片的字号（px，8–32）。投影上看不清就调大，图会跟着变高变宽；图片面板里的 A−/A＋ 就是改这一项（每次 2px），改完直接落盘，下次导出还是这个字号。注意与「编辑器字号」是两回事：这里只管导出的 PNG。"
         },
         "lgAssist.submit.language": {
           "type": "string",
@@ -364,6 +388,18 @@
         "icon": "$(file-media)"
       },
       {
+        "command": "lgAssist.increaseCodeFontSize",
+        "category": "洛谷助手",
+        "title": "放大代码字号",
+        "icon": "$(zoom-in)"
+      },
+      {
+        "command": "lgAssist.decreaseCodeFontSize",
+        "category": "洛谷助手",
+        "title": "缩小代码字号",
+        "icon": "$(zoom-out)"
+      },
+      {
         "command": "lgAssist.createBanshuDoc",
         "category": "洛谷助手",
         "title": "生成/打开题解板书",
@@ -482,6 +518,16 @@
       {
         "command": "lgAssist.exportImage",
         "key": "ctrl+alt+p",
+        "when": "editorTextFocus && (resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c)"
+      },
+      {
+        "command": "lgAssist.increaseCodeFontSize",
+        "key": "ctrl+alt+=",
+        "when": "editorTextFocus && (resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c)"
+      },
+      {
+        "command": "lgAssist.decreaseCodeFontSize",
+        "key": "ctrl+alt+-",
         "when": "editorTextFocus && (resourceExtname == .cpp || resourceExtname == .cc || resourceExtname == .cxx || resourceExtname == .c)"
       }
     ],

@@ -26,6 +26,11 @@ export interface WhiteboardHtmlOptions {
   /** 导出像素尺寸（来自 `lgAssist.whiteboard.exportDpi`）；不传就用默认 150dpi 的尺寸 */
   exportWidth?: number;
   exportHeight?: number;
+  /**
+   * 笔迹稳定器强度（来自 `lgAssist.whiteboard.stabilize`）：off / light / medium / strong。
+   * 脏值由 webview 侧夹回「关」—— 这里只原样带过去，不在两处各判一次。
+   */
+  stabilize?: unknown;
   /** 要不要显示「导出并插入题解」按钮：只有关联了题目、且题解功能开着时才给 */
   banshu?: boolean;
   /** 白板的 webview 脚本（dist/whiteboard.js 的内容） */
@@ -236,6 +241,7 @@ export function buildWhiteboardHtml(opts: WhiteboardHtmlOptions): string {
     pages: opts.pages,
     exportWidth: opts.exportWidth ?? EXPORT_WIDTH,
     exportHeight: opts.exportHeight ?? EXPORT_HEIGHT,
+    stabilize: opts.stabilize,
   });
 
   const body = `<div class="wb-bar">

@@ -69,6 +69,11 @@ export interface WhiteboardOptions {
   /** 导出分辨率（dpi，来自 `lgAssist.whiteboard.exportDpi`）；缺省用模型的默认档 */
   exportDpi?: number;
   /**
+   * 笔迹稳定器强度（来自 `lgAssist.whiteboard.stabilize`）：off / light / medium / strong。
+   * 原样带进载荷，脏值由 webview 侧夹回「关」。
+   */
+  stabilize?: unknown;
+  /**
    * 「导出并插入题解」的目标：给了才会在工具栏上多出那个按钮。
    * 走它时**不弹保存对话框**，直接按固定名写进题目录（`<base>.png` / `<base>-p2.png`），
    * 好让题解文档能按约定文件名引用。
@@ -426,6 +431,8 @@ class WhiteboardPanel {
       pages: this.savedPages(),
       exportWidth: px.width,
       exportHeight: px.height,
+      // 笔迹稳定器强度（脏值由 webview 侧夹回「关」，这里只原样带过去）
+      stabilize: this.opts.stabilize,
       // 有题解目标才显示「导出并插入题解」按钮（知识面板没有题目，自然没有）
       banshu: Boolean(this.opts.banshu),
       script: this.webviewScript(),

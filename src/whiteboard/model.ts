@@ -253,6 +253,25 @@ export function clampPressure(p: number): number {
   return Math.min(1, Math.max(0.05, p));
 }
 
+/**
+ * 这一笔该用多少压力。
+ *
+ * 支持压感的数位笔**偶尔会送来一次读不出压力的事件**（板子驱动在笔仍压着纸时给出 0）。
+ * 按那一次直接画就是「线条上突然凹进去一个细点」—— 而那一刻笔根本没抬起来，
+ * `clampPressure` 的 0.05 恰好会把这一笔抽成一条细线。
+ * 所以：读数无效 → 沿用**同一笔里**上一个有效读数；一笔开头就没有有效读数才退回 `MOUSE_PRESSURE`
+ * （等宽，与鼠标一致，不猜一个偏细的值）。
+ *
+ * 调用方负责在开新笔画时把 `last` 清成 `MOUSE_PRESSURE`：上一笔收尾时的压力和这一笔无关
+ * （中途换过笔尖粗细、换过设备，都会让它变成假数据）。
+ */
+export function penPressure(raw: unknown, last: number): number {
+  const n = Number(raw);
+  if (Number.isFinite(n) && n > 0) return clampPressure(n);
+  const prev = Number(last);
+  return Number.isFinite(prev) && prev > 0 ? clampPressure(prev) : MOUSE_PRESSURE;
+}
+
 export function worldToScreen(x: number, y: number, view: View): [number, number] {
   return [x * view.zoom + view.panX, y * view.zoom + view.panY];
 }

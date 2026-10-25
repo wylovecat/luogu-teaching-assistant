@@ -1,7 +1,10 @@
 import * as vscode from "vscode";
 import { DEFAULT_COVER_FILE } from "./cover/spec";
+import { clampEditorFontPx } from "./editorFont";
+import { clampCodeFontPx, DEFAULT_CODE_FONT_PX } from "./imgexport/codeFont";
 import { DEFAULT_ENABLE_O2 } from "./luogu/contract";
 import { DEFAULT_EXPORT_DPI, clampExportDpi } from "./whiteboard/model";
+import { DEFAULT_STABILIZE_LEVEL, clampStabilize, type StabilizeLevel } from "./whiteboard/stabilizer";
 
 function cfg() {
   return vscode.workspace.getConfiguration("lgAssist");
@@ -57,6 +60,18 @@ export interface LuoguConfig {
 export interface WhiteboardConfig {
   /** 导出 A4 PNG 的分辨率（dpi） */
   exportDpi: number;
+  /**
+   * 笔迹稳定器强度（off / light / medium / strong）。
+   *
+   * 读出来就用 `clampStabilize` 洗过：设置项里被手改成脏值（"FAST"、数字）时一律退回「关」，
+   * **不猜**用户是想开着 —— 开着会让落墨滞后于笔尖（见 stabilizer.ts 的取舍 ①）。
+   */
+  stabilize: StabilizeLevel;
+}
+
+export interface ImageExportConfig {
+  /** 代码图片的字号（px，8–32） */
+  fontSize: number;
 }
 
 export function compileConfig(): CompileConfig {
@@ -184,7 +199,100 @@ export function luoguConfig(): LuoguConfig {
 }
 
 export function whiteboardConfig(): WhiteboardConfig {
-  return { exportDpi: clampExportDpi(cfg().get<number>("whiteboard.exportDpi", DEFAULT_EXPORT_DPI)) };
+  return {
+    exportDpi: clampExportDpi(cfg().get<number>("whiteboard.exportDpi", DEFAULT_EXPORT_DPI)),
+    // 脏值在这里就洗掉，webview 侧再洗一次（纵深防御：载荷也可能来自别处）
+    stabilize: clampStabilize(cfg().get("whiteboard.stabilize", DEFAULT_STABILIZE_LEVEL)),
+  };
+}
+
+/**
+ * 代码图片的字号（面板里的 A−/A＋ 改的就是这一项）。
+ *
+ * 读出来就清洗：设置项里被手改成脏值（0、999、字符串）时夹回区间，
+ * 免得导出时算出一张畸形的图。默认 14px，与引入这个设置项之前写死的值一致。
+ */
+export function imageExportConfig(): ImageExportConfig {
+  return { fontSize: clampCodeFontPx(cfg().get<number>("imageExport.fontSize", DEFAULT_CODE_FONT_PX)) };
+}
+
+/**
+ * 把代码图片的字号写进设置（图片面板里的 A−/A＋ 走这条）。
+ *
+ * 写哪一层是有讲究的：用户点一下的期待是「下次导出还是这个字号」，所以默认写**用户设置**。
+ * 但如果工作区（或工作区文件夹）里已经显式写过这个键，用户设置会被那份盖住 ——
+ * 表现是「点了 A＋，字号当场变了，重开面板又跳回去」。所以先 inspect：谁定过就改谁。
+ * 单文件夹工作区里写 WorkspaceFolder 会抛，逐层退回，最后兜底 Global。
+ */
+export async function updateImageFontSize(px: number): Promise<void> {
+  const c = cfg();
+  const key = "imageExport.fontSize";
+  const insp = c.inspect<number>(key);
+  const chain: vscode.ConfigurationTarget[] = [];
+  if (insp?.workspaceFolderValue !== undefined) chain.push(vscode.ConfigurationTarget.WorkspaceFolder);
+  if (insp?.workspaceValue !== undefined) chain.push(vscode.ConfigurationTarget.Workspace);
+  chain.push(vscode.ConfigurationTarget.Global);
+  let last: unknown;
+  for (const target of chain) {
+    try {
+      await c.update(key, clampCodeFontPx(px), target);
+      return;
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last instanceof Error ? last : new Error(String(last ?? "写入设置失败"));
+}
+
+/**
+ * 改「代码源文件」的字号（写 VS Code 自己的 `editor.fontSize`）。
+ *
+ * 写哪一层同 `updateImageFontSize`：老师在工作区里定过就改工作区，否则写用户设置，
+ * 逐层退回兜底 Global —— 否则改的是被盖住的那一份，症状是「点了没反应」。
+ * 另外 `"[cpp]": { "editor.fontSize": … }` 这种**语言专属**值会盖住通用值，
+ * 所以当前语言真定过时，先改语言那一层（`overrideInLanguage`）。
+ */
+export async function updateEditorFontSize(px: number): Promise<void> {
+  const value = clampEditorFontPx(px);
+  const editor = vscode.window.activeTextEditor;
+  const scoped = vscode.workspace.getConfiguration("editor", editor?.document);
+  const insp = scoped.inspect<number>("fontSize");
+  const languageId = editor?.document.languageId;
+  interface Step {
+    config: vscode.WorkspaceConfiguration;
+    target: vscode.ConfigurationTarget;
+    inLanguage?: boolean;
+  }
+  const chain: Step[] = [];
+  if (languageId && (insp?.languageIds ?? []).includes(languageId)) {
+    chain.push({
+      config: vscode.workspace.getConfiguration("editor", { languageId }),
+      target:
+        insp?.workspaceFolderLanguageValue !== undefined
+          ? vscode.ConfigurationTarget.WorkspaceFolder
+          : insp?.workspaceLanguageValue !== undefined
+            ? vscode.ConfigurationTarget.Workspace
+            : vscode.ConfigurationTarget.Global,
+      inLanguage: true,
+    });
+  }
+  if (insp?.workspaceFolderValue !== undefined) {
+    chain.push({ config: scoped, target: vscode.ConfigurationTarget.WorkspaceFolder });
+  }
+  if (insp?.workspaceValue !== undefined) {
+    chain.push({ config: scoped, target: vscode.ConfigurationTarget.Workspace });
+  }
+  chain.push({ config: scoped, target: vscode.ConfigurationTarget.Global });
+  let last: unknown;
+  for (const step of chain) {
+    try {
+      await step.config.update("fontSize", value, step.target, step.inLanguage);
+      return;
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last instanceof Error ? last : new Error(String(last ?? "写入设置失败"));
 }
 
 /** 输出通道，供各处统一打印日志。 */

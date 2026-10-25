@@ -24,11 +24,11 @@ import {
   PENS,
   PEN_WIDTHS,
   clampPageCount,
-  clampPressure,
   clampZoom,
   exportScale,
   pageTop,
   pagesHeight,
+  penPressure,
   resolvePageCount,
   sanitizeStrokes,
   screenToWorld,
@@ -41,6 +41,14 @@ import {
   type View,
 } from "./model";
 import { FrameLoop } from "./frameLoop";
+import {
+  DEFAULT_STABILIZE_LEVEL,
+  StrokeStabilizer,
+  clampStabilize,
+  stabilizeEnabled,
+  stabilizeParams,
+  type StabilizeLevel,
+} from "./stabilizer";
 
 declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
 
@@ -53,6 +61,11 @@ interface Payload {
   /** 导出像素尺寸（面板按 `lgAssist.whiteboard.exportDpi` 算好传进来） */
   exportWidth?: number;
   exportHeight?: number;
+  /**
+   * 笔迹稳定器强度（面板按 `lgAssist.whiteboard.stabilize` 传进来，缺省 off）。
+   * 脏值 / 没这个键都算「关」—— 这一层不能自己把一个不认识的设置猜成「开着」。
+   */
+  stabilize?: unknown;
 }
 
 interface ExtMessage {
@@ -159,6 +172,25 @@ let exportCssOk = true;
 let pendingCss: ((v: { css: string; ok: boolean }) => void) | null = null;
 /** inlineImages 的回包（url → data URI）挂在这个回调上 */
 let pendingImages: ((map: Record<string, string>) => void) | null = null;
+
+/**
+ * 笔迹稳定器强度（`lgAssist.whiteboard.stabilize`，缺省关）。
+ * 逐笔生效：改了设置要重开面板（面板每次 render 现读，与 exportDpi 同一条件）。
+ */
+let stabilizeLevel: StabilizeLevel = DEFAULT_STABILIZE_LEVEL;
+/**
+ * 当前这一笔的输入滤波器。off 档与没在写字时都是 null —— 一条 pointermove 都不多跑。
+ *
+ * **逐笔新建**（startStroke 里 new，finishStroke 里丢弃）：滞后、死区圆心、尖角方向这些状态
+ * 都属于这一笔，带进下一笔就是上一笔的尾巴拽着新落点跑。
+ */
+let filter: StrokeStabilizer | null = null;
+/**
+ * 这一笔里最后一个读得出压力的读数（`penPressure` 的兜底输入）。
+ * 数位板偶尔在笔仍压着纸时送来一次 0，跟着它画就是线条上凭空凹一个细点。
+ * 开新笔画时清回 MOUSE_PRESSURE：中途换过笔、换过粗细，上一笔收尾时的压力都是假数据。
+ */
+let lastPenPressure = MOUSE_PRESSURE;
 
 function must<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
@@ -475,6 +507,10 @@ function drawNow(): void {
 function applyView(): void {
   world.style.transform = `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`;
   zoomLabel.textContent = `${Math.round(view.zoom * 100)}%`;
+  // 正在写的这一笔撞上视角变化：滤波器攒的是**屏幕坐标**（死区圆心、尖角顶点、平均缓冲），
+  // 缩放/平移一进来，这些点换算到世界坐标就整体错位（症状是笔尾突然甩出一截）。
+  // 与其纠偏，不如让这一笔剩下的部分不再过滤 —— 手感退化成关档，但画出来的一定是对的。
+  if (live && filter) filter = null;
   // 视角变了但笔迹没动：这一帧由 blitBase 按变换复用，离屏那份留给手势停后再矢量重画
   settleBaseSoon();
 }
@@ -583,7 +619,11 @@ function removePage(): void {
 // ── 批注 ────────────────────────────────────────────────────────────────
 
 function pressureOf(e: PointerEvent): number {
-  return e.pointerType === "pen" ? clampPressure(e.pressure) : MOUSE_PRESSURE;
+  if (e.pointerType !== "pen") return MOUSE_PRESSURE;
+  // 读不出压力时沿用这一笔里上一个有效读数（见 model.ts 的 penPressure）：
+  // 直接按 0 画会让线条上凭空凹进去一个细点，而那一刻笔并没有抬起来。
+  lastPenPressure = penPressure(e.pressure, lastPenPressure);
+  return lastPenPressure;
 }
 
 function localPoint(e: { clientX: number; clientY: number }): [number, number] {
@@ -624,14 +664,30 @@ function snapshot(): void {
   if (history.length > 60) history.shift();
 }
 
-function appendPoint(ev: PointerEvent): void {
+/**
+ * 把一个点落到正在写的这一笔上。世界坐标换算 + 「靠太近就丢掉」都只在这一处，
+ * 原始事件（不过滤波器）和滤波器吐出来的点走同一条路，两条路的落笔规则不会走偏。
+ */
+function pushLivePoint(sx: number, sy: number, pressure: number): void {
   if (!live) return;
-  const [sx, sy] = localPoint(ev);
   const [x, y] = screenToWorld(sx, sy, view);
   const last = live.points[live.points.length - 1];
   if (last && Math.hypot(x - last[0], y - last[1]) < MIN_POINT_DISTANCE) return;
   live.points.push([x, y]);
-  live.pressures.push(pressureOf(ev));
+  live.pressures.push(pressure);
+}
+
+function appendPoint(ev: PointerEvent): void {
+  if (!live) return;
+  const [sx, sy] = localPoint(ev);
+  const p = pressureOf(ev);
+  if (!filter) {
+    pushLivePoint(sx, sy, p);
+    return;
+  }
+  // 滤波器按**屏幕像素**收点（手抖的幅度与缩放无关，见 stabilizer.ts 文件头），
+  // 交出来的还是屏幕坐标，落到笔画上再换世界坐标 —— 与不过滤波器那条路完全同形。
+  for (const out of filter.next([sx, sy, p])) pushLivePoint(out[0], out[1], out[2]);
 }
 
 /** 指针捕获失败（pointerId 已失效等）不该让整支笔跟着失效，包一层即可 */
@@ -661,7 +717,14 @@ function startStroke(e: PointerEvent, route: string): void {
   activePointer = e.pointerId;
   strokeStart = performance.now();
   strokeRoute = route;
-  live = { color, width: strokeWidth, points: [[x, y]], pressures: [pressureOf(e)] };
+  lastPenPressure = MOUSE_PRESSURE; // 逐笔清零，见声明处
+  const p = pressureOf(e);
+  live = { color, width: strokeWidth, points: [[x, y]], pressures: [p] };
+  // 稳定器**逐笔新建**，且第一个点照原样落下去（它同时是死区的初始圆心）：
+  // 「点一下就抬笔」也必须留下一个点，所以不能等滤波器开口。
+  filter = stabilizeEnabled(stabilizeLevel)
+    ? new StrokeStabilizer(stabilizeParams(stabilizeLevel), [sx, sy, p])
+    : null;
   livePath = null;
   liveDirty = true; // 轮廓交给这一帧的 draw 算（起笔也一样，反正马上要画）
   capture(e.pointerId);
@@ -670,6 +733,14 @@ function startStroke(e: PointerEvent, route: string): void {
 /** 收尾当前笔画：把已经画出来的点提交成正式笔画。pointerup / 失去捕获 / 失焦都走这里，重复调用安全 */
 function finishStroke(route = strokeRoute): void {
   const finished = live;
+  // 先把滤波器欠下的最后一段补上（滞后不补，每一笔的尾巴上都缺一点，见 stabilizer.ts 取舍 ③）。
+  // 必须在 `live = null` 之前：补出来的这些点还是这一笔的。
+  // 先把滤波器欠下的最后一段补上（滞后不补，每一笔的尾巴上都缺一点，见 stabilizer.ts 取舍 ③）。
+  // 必须在 `live = null` 之前：补出来的这些点还是这一笔的。
+  if (finished && filter) {
+    for (const out of filter.tail()) pushLivePoint(out[0], out[1], out[2]);
+  }
+  filter = null;
   activePointer = null;
   live = null;
   livePath = null;
@@ -1379,6 +1450,8 @@ function start(): void {
   minPages = clampPageCount(Number(payload.pages));
   exportW = positiveInt(payload.exportWidth, EXPORT_WIDTH);
   exportH = positiveInt(payload.exportHeight, EXPORT_HEIGHT);
+  // 稳定器强度：面板按设置传过来。脏值 / 老版本载荷没这个键 → 关（不猜用户要开着）
+  stabilizeLevel = clampStabilize(payload.stabilize);
 
   rebuildPaths();
   resizeCanvas();

@@ -21,6 +21,15 @@
 import * as vscode from "vscode";
 import type { JudgeReport } from "../judge/judge";
 import type { Statement } from "../problems/statement";
+import { updateEditorFontSize } from "../config";
+import {
+  DEFAULT_EDITOR_FONT_PX,
+  MAX_EDITOR_FONT_PX,
+  MIN_EDITOR_FONT_PX,
+  clampEditorFontPx,
+  editorFontHint,
+  stepEditorFontPx,
+} from "../editorFont";
 import { type PeerHost, refreshCurrentRef } from "./base";
 import { type AppDeps } from "./deps";
 import { BanshuController } from "./banshu";
@@ -114,6 +123,32 @@ export class App implements PeerHost {
 
   exportImage(uri?: vscode.Uri): Promise<void> {
     return this.imagesCtl.exportImage(uri);
+  }
+
+  // ── 代码字号（编辑器，不是导出的图片） ────────────────────────
+
+  /**
+   * 调「代码源文件」的字号：写 VS Code 自己的 `editor.fontSize`。
+   *
+   * 投屏时老师常要把代码放大，而 VS Code 自带的 Ctrl+= 是**整窗缩放**（菜单栏、侧边栏、
+   * 终端一起变大）—— 这里只动代码字号那一份。到头了要明说一句，别让按钮看着像坏的。
+   */
+  async changeCodeFontSize(delta: number): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    // 传 TextDocument 而不是 Uri：这样 `[cpp]` 的语言专属设置也一起算进来，
+    // 读到的才是老师**眼里**那个字号（不然读了通用值，改了却看不见变化）
+    const setting = vscode.workspace.getConfiguration("editor", editor?.document);
+    const current = clampEditorFontPx(setting.get<number>("fontSize", DEFAULT_EDITOR_FONT_PX));
+    const next = stepEditorFontPx(current, delta);
+    if (next === current) {
+      vscode.window.setStatusBarMessage(
+        `代码字号已经是 ${current}px（可调范围 ${MIN_EDITOR_FONT_PX}–${MAX_EDITOR_FONT_PX}）`,
+        3000,
+      );
+      return;
+    }
+    await updateEditorFontSize(next);
+    vscode.window.setStatusBarMessage(editorFontHint(next), 2500);
   }
 
   // ── 题解板书 ──────────────────────────────────────────────────

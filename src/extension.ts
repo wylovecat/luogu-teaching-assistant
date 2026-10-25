@@ -46,6 +46,8 @@ export function activate(context: vscode.ExtensionContext): void {
   register("lgAssist.openKnowledgeBoard", () => app.openKnowledgeBoard());
   register("lgAssist.submit", () => app.submit());
   register("lgAssist.exportImage", (uri) => app.exportImage(uri as vscode.Uri | undefined));
+  register("lgAssist.increaseCodeFontSize", () => app.changeCodeFontSize(1));
+  register("lgAssist.decreaseCodeFontSize", () => app.changeCodeFontSize(-1));
   register("lgAssist.createBanshuDoc", () => app.createBanshuDoc());
   register("lgAssist.insertBanshuCode", () => app.insertBanshuCode());
   register("lgAssist.exportBanshuPdf", () => app.exportBanshuPdf());

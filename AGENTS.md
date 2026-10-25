@@ -201,6 +201,29 @@ CSRF 只走头、body 里没有 csrf 域，`Origin` 与 `X-Requested-With: XMLHt
   另：**板书图宽度这个设置要清洗**（`banshu/template.ts` 的 `banshuImageWidth`）——
   它是原样拼进 Typst 源码的，一个坏字符就让整份 PDF 编译不过。
 
+## 字号：两套，互不相干（别为了「统一」把它们合并）
+
+- **导出的代码图片里的字号**（`src/imgexport/codeFont.ts`，设置项 `lgAssist.imageExport.fontSize`，
+  8–32px，默认 **14**）：管的是 canvas 上画出来的字。默认 14 是**刻意**与引入这个设置项之前写死的
+  14px/21px 行高对齐的 —— 改了默认值，所有老用户导出的图尺寸就变了。
+- **老师正在写的那个编辑器的字号**（`src/editorFont.ts`，写 VS Code 自己的 `editor.fontSize`，
+  8–40px，步长 2）：与上面那套档位**完全无关**。一张图能接受 8px 的小字，屏幕上没人愿意这么看。
+  命令 `lgAssist.increaseCodeFontSize` / `lgAssist.decreaseCodeFontSize`（`Ctrl+Alt+=` / `Ctrl+Alt+-`）。
+- 两条别推翻：
+  - **「谁能改、能改到多少」只有一份事实**：档位表在纯逻辑模块里，注入 webview 的那份是
+    `codeFontRuntime()` **生成**出来的（不是抄的），`test/codeFont.test.ts` 逐值比对，
+    两边不一致必须立刻红（白板 `SHEET_RULES` 的坑同源）。
+  - **写设置要「谁定过就改谁」**（`config.ts` 的 `updateImageFontSize` / `updateEditorFontSize`）：
+    先 `inspect` 看工作区/工作区文件夹/语言专属层谁定过，改那一层，逐层退回兜底 Global。
+    改被盖住的那一份的症状是「点了 A＋，当场变了，重开面板又跳回去」。
+    编辑器字号还要先看 `"[cpp]"` 这种**语言专属**值——它会盖住通用值。
+- **导出 PNG 有个静默故障要防**：Chromium 的 canvas 超过上限时**不抛错**，`toDataURL()` 只给一个
+  `"data:,"`；直接写盘就是 0 字节的 `.png`，而面板上明明弹了「已保存图片」，老师点开才发现打不开。
+  所以两道防护都在（`exportImage.ts`）：**画之前**判尺寸（单边 32767px / 面积 268435456px²，
+  判据由 `canvasLimitRuntime()` 注入面板），**写盘之前**校 PNG 签名（`pngBytes`）。
+- **加命令要同时改两处**：`package.json` 的 `contributes.commands` 与 `src/extension.ts` 的 `register`，
+  少一处冒烟测试直接红（它硬断言「声明过的命令必须都注册了」）。命令 id 前缀固定 `lgAssist.`。
+
 ## 登录态的边界
 
 - 洛谷登录带验证码，扩展里**做不了自动登录，也没有静默重登**。唯一入口是「粘贴 Cookie」。
@@ -318,6 +341,18 @@ CSRF 只走头、body 里没有 csrf 域，`Origin` 与 `X-Requested-With: XMLHt
   才是真实笔压，鼠标恒为 `0.5`，所以鼠标画出来必然是等宽线。变宽笔迹用 `perfect-freehand`，
   参数抄 Excalidraw（`size = 笔宽 × 4.25`、`thinning 0.6`、`smoothing 0.5`、`simulatePressure: false`）；
   高回报率的笔要遍历 `getCoalescedEvents()` 取点，否则会画成折线。别照 Excalidraw 那套「鼠标按速度模拟压感」。
+- **压感读数无效时要兜底，不能直接按 0 画**（`src/whiteboard/model.ts` 的 `penPressure`）：
+  数位板偶尔在笔仍压着纸时送来一次压力 0，跟着它画就是「线条上凭空凹进去一个细点」。
+  规则：读数无效 → 沿用**同一笔里**上一个有效读数；一笔开头就没有有效读数才退回 `MOUSE_PRESSURE`（等宽）。
+  `lastPenPressure` 必须**逐笔清零**（`startStroke` 里）—— 上一笔收尾时的压力是假数据。
+- **笔迹稳定器（`src/whiteboard/stabilizer.ts`）默认关**（`lgAssist.whiteboard.stabilize`，四档 off/light/medium/strong）：
+  任何平均都会让落墨滞后于笔尖约 `buffer/2` 个事件，所以**只能让用户主动开**，别改成默认开。
+  三条别推翻的取舍：① 脏值一律退回「关」，**不猜**用户是想开着；② 开着就一定要带尖角检测（`cusp`），
+  否则死区会把讲题时要圈的拐角抹圆；③ 收笔必须 `tail()` 补到最后那个原始事件，否则每一笔的尾巴上少一截
+  （写「1」「7」的最后一挑最先露馅），补的是二次样条不是直线（直线会在笔尾留个硬折角）。
+  接线上的三个坑：滤波器**逐笔新建**（`startStroke` 里 new、`finishStroke` 里丢弃，状态属于这一笔）；
+  视角变化时正在写的这一笔要**丢弃滤波器**（它攒的是屏幕坐标，换算到世界坐标会整体错位，症状是笔尾甩出一截）；
+  设置项在 `config.ts` 里就 `clampStabilize` 洗过，webview 侧再洗一次（纵深防御，不在两处各判一次）。
 - **笔尖指示器必须自己画**：数位笔一接触，Chromium 就把系统鼠标光标藏起来（抬笔才回来），
   所以 `pointerType !== "mouse"` 时给视口加 `.wb-pen-cursor`（`cursor: none`）并由 canvas 画
   空心圈 + 笔杆（圆心＝笔尖＝笔迹落点；实心会盖住刚写的笔迹；笔杆朝**右上方**，与握笔姿势一致）。

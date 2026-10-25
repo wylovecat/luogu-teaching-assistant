@@ -79,6 +79,8 @@ export class BoardController extends Controller {
       lastDir: this.context.globalState.get<string>(LAST_EXPORT_DIR_KEY),
       // 每次开面板现读一次设置：改了 lgAssist.whiteboard.exportDpi 重开面板就生效
       exportDpi: whiteboardConfig().exportDpi,
+      // 笔迹稳定器强度（off / light / medium / strong，默认关）
+      stabilize: whiteboardConfig().stabilize,
       banshu,
       onSaved: async (saved) => {
         await this.context.globalState.update(LAST_EXPORT_DIR_KEY, path.dirname(saved));
