@@ -1,0 +1,232 @@
+**数据范围**
+
+对于所有测试数据，$-{10}^9 \le a,b \le {10}^9$。
+
+**广告**
+
+洛谷出品的算法教材，帮助您更简单地学习基础算法。[【官方网店绝赞热卖中！】>>>](https://item.taobao.com/item.htm?id=637730514783)
+
+[![](https://cdn.luogu.com.cn/upload/image_hosting/njc7dlng.png)](https://item.taobao.com/item.htm?id=637730514783)
+
+**本题各种语言的程序范例：**
+
+C
+```c
+#include <stdio.h>
+
+int main()
+{
+    int a,b;
+    scanf("%d%d",&a,&b);
+    printf("%d\n", a+b);
+    return 0;
+}
+```
+----------------
+
+C++
+```cpp
+#include <iostream>
+#include <cstdio>
+
+using namespace std;
+
+int main()
+{
+    int a,b;
+    cin >> a >> b;
+    cout << a+b << endl;
+    return 0;
+}
+```
+----------------
+
+Pascal
+```pascal
+var a, b: longint;
+begin
+    readln(a,b);
+    writeln(a+b);
+end.
+```
+-----------------
+
+Python 3
+
+```python
+s = input().split()
+print(int(s[0]) + int(s[1]))
+```
+-----------------
+
+Java
+```java
+import java.io.*;
+import java.util.*;
+public class Main {
+    public static void main(String args[]) throws Exception {
+        Scanner cin=new Scanner(System.in);
+        int a = cin.nextInt(), b = cin.nextInt();
+        System.out.println(a+b);
+    }
+}
+```
+-----------------
+
+JavaScript（Node.js）
+
+```javascript
+const fs = require('fs')
+const data = fs.readFileSync('/dev/stdin')
+const result = data.toString('ascii').trim().split(' ').map(x => parseInt(x)).reduce((a, b) => a + b, 0)
+console.log(result)
+process.exit() // 请注意必须在出口点处加入此行
+```
+
+-----------------
+
+Ruby
+
+```ruby
+a, b = gets.split.map(&:to_i)
+print a+b
+```
+
+-----------------
+
+PHP
+
+```php
+<?php
+$input = trim(file_get_contents("php://stdin"));
+list($a, $b) = explode(' ', $input);
+echo $a + $b;
+```
+
+-----------------
+
+Rust
+
+```rust
+use std::io;
+
+fn main(){
+    let mut input=String::new();
+    io::stdin().read_line(&mut input).unwrap();
+    let mut s=input.trim().split(' ');
+
+    let a:i32=s.next().unwrap()
+               .parse().unwrap();
+    let b:i32=s.next().unwrap()
+               .parse().unwrap();
+    println!("{}",a+b);
+}
+```
+
+-----------------
+
+Go
+
+```go
+package main
+
+import "fmt"
+
+func main() {
+    var a, b int
+    fmt.Scanf("%d%d", &a, &b)
+    fmt.Println(a+b)
+}
+```
+
+-----------------
+
+C# Mono
+
+```cs
+using System;
+
+public class APlusB{
+    private static void Main(){
+        string[] input = Console.ReadLine().Split(' ');
+        Console.WriteLine(int.Parse(input[0]) + int.Parse(input[1]));
+    }
+}
+```
+
+------------------
+
+Kotlin
+
+```kotlin
+fun main(args: Array<String>) {
+    val (a, b) = readLine()!!.split(' ').map(String::toInt)
+    println(a + b)
+}
+```
+
+------------------
+
+Haskell
+
+```haskell
+main = do
+    [a, b] <- (map read . words) `fmap` getLine
+    print (a+b)
+```
+
+------------------
+
+Lua
+
+```lua
+a = io.read('*n')
+b = io.read('*n')
+print(a + b)
+```
+
+------------------
+
+OCaml
+
+```ocaml
+Scanf.scanf "%i %i\n" (fun a b -> print_int (a + b))
+```
+
+------------------
+
+Julia
+
+```julia
+nums = map(x -> parse(Int, x), split(readline(), " "))
+println(nums[1] + nums[2])
+```
+
+------------------
+
+Scala
+
+```scala
+object Main {
+  def main(args: Array[String]): Unit = {
+    import java.util.Scanner
+    
+    val cin = new Scanner(System.in)
+    val a = cin.nextInt()
+    val b = cin.nextInt()
+    System.out.println(a + b)
+  }
+}
+```
+
+------------------
+
+Perl
+
+```perl
+my $in = <STDIN>;
+chomp $in;
+$in = [split /[\s,]+/, $in];
+my $c = $in->[0] + $in->[1];
+print "$c\n";
+```

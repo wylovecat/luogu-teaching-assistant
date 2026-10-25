@@ -7,6 +7,7 @@ import {
   cmdQuote,
   detectExternalTemplate,
   exitSuffix,
+  externalTemplateFile,
   fillExternalTemplate,
   isCmdShell,
   shellQuote,
@@ -123,4 +124,12 @@ test("sanitizeDirName 去掉路径分隔符等非法字符", () => {
   assert.equal(sanitizeDirName("  "), "_");
   assert.equal(sanitizeDirName(".."), "_");
   assert.equal(sanitizeDirName("正常题目名"), "正常题目名");
+});
+
+test("外置终端模板里的 ${file} 指的是源文件，不是编译产物", () => {
+  // 拿到源文件就用它
+  assert.equal(externalTemplateFile("C:\\build\\a.exe", "C:\\work\\a.cpp"), "C:\\work\\a.cpp");
+  // 拿不到就退回可执行文件（别在命令里留下没替换的 ${file}）
+  assert.equal(externalTemplateFile("C:\\build\\a.exe"), "C:\\build\\a.exe");
+  assert.equal(externalTemplateFile("C:\\build\\a.exe", "  "), "C:\\build\\a.exe");
 });

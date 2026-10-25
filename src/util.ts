@@ -3,6 +3,8 @@
  * 这里的函数被 test/ 下的 node:test 直接引用，不要 import 'vscode'。
  */
 
+import * as path from "node:path";
+
 /**
  * 题号形态：短前缀 + 一段数字，数字后面还能跟字母/下划线。
  *
@@ -106,6 +108,35 @@ export function isFinalJudgeResult(res: { done: boolean; id: number; rawStatus: 
   return res.id > 0 || res.rawStatus.trim() !== "";
 }
 
+/**
+ * 这个判定要不要「再确认一拍」。
+ *
+ * **AC 与 CE 是稳定的**：编译失败就是编译失败，跑过了就是跑过了，不会再翻 —— 直接报。
+ * 其余终局判定（WA / TLE / MLE / RE / UKE / NAC）都可能是站点还在写回时的中间态：
+ * 站点先写一个 WA、过一会儿才把真正的 TLE 写上。宁可多等一拍，也不要显示错的判定。
+ *
+ * `?`（未知）不确认：它本来就不是一个判定，确认它也确认不出什么。
+ */
+export function verdictNeedsConfirm(verdict: string): boolean {
+  return verdict !== "AC" && verdict !== "CE" && verdict !== "?";
+}
+
+/**
+ * 一次判定的身份串：两次轮询拿到**同一个串**，才认作「同一个判定」。
+ *
+ * 只用判定与站点状态名，**不把分数/耗时算进去** —— 那两个会随着测试点跑完而变
+ * （分数是逐点累加的），算进来会让「同一个判定」永远对不上，白等一场。
+ * 所以入参里的 `score` / `timeMs` 是被**故意忽略**的（留着是为了调用方少写一次取值）。
+ */
+export function judgeSignature(res: {
+  verdict: string;
+  rawStatus: string;
+  score?: number | null;
+  timeMs?: number | null;
+}): string {
+  return `${res.verdict}|${res.rawStatus}`;
+}
+
 /** 判定词的中文简述，用于界面展示。 */
 export function verdictLabel(verdict: string): string {
   const map: Record<string, string> = {
@@ -158,4 +189,31 @@ export function indentationFix(
 export function maskAccount(phone: string): string {
   if (phone.length < 5) return phone;
   return `${phone.slice(0, 3)}****${phone.slice(-2)}`;
+}
+
+/**
+ * 两个路径是不是同一个文件。
+ *
+ * 用来判「这次提交/这次结果是不是面板上正在显示的那份代码」。
+ *
+ * 三条都得处理：① 路径里可能有 `..`、重复分隔符、大小写差异 —— Windows 上文件系统
+ * 不区分大小写，`C:\题库\P1001.cpp` 与 `c:\题库\p1001.cpp` 是同一个文件；
+ * ② 平台要能显式传（跟 `cacheRoot(platform)` / `exeNameFor(stem)` 同一套约定），
+ * 测试不该依赖跑测试那台机器的系统；
+ * ③ **路径语义也跟着平台走**（win32 用 `path.win32.resolve`，其余用 `path.posix.resolve`）：
+ * 只让参数管大小写不管解析的话，在 Linux 上 `C:\a\..\b` 会被当成**一整个文件名**
+ * （POSIX 里反斜杠不是分隔符），`..` 就不归一了 —— 同样的断言在 Windows 上过、
+ * 在 CI 的 ubuntu 上红。
+ */
+export function sameFilePath(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (!a || !b) return false;
+  const win = platform === "win32";
+  const resolve = win ? path.win32.resolve : path.posix.resolve;
+  const norm = (p: string): string => {
+    let resolved = resolve(p);
+    // 去掉结尾的分隔符（根目录本身除外）
+    if (resolved.length > 1) resolved = resolved.replace(/[\\/]+$/, "");
+    return win ? resolved.toLowerCase() : resolved;
+  };
+  return norm(a) === norm(b);
 }

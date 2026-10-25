@@ -2,7 +2,7 @@
   "name": "luogu-teaching-assistant",
   "displayName": "洛谷教学助手",
   "description": "信息学奥赛教学助手：单文件一键编译运行、洛谷抓题建题与样例评测、提交代码、题面白板批注、代码转图片。",
-  "version": "0.1.5",
+  "version": "0.1.12",
   "publisher": "lgassist",
   "license": "MIT",
   "engines": {
@@ -183,8 +183,8 @@
         },
         "lgAssist.banshu.author": {
           "type": "string",
-          "default": "",
-          "description": "题解标题区显示的署名。留空则不显示署名栏（只留日期）。"
+          "default": "爱学习的咸鱼君",
+          "description": "题解标题区显示的署名。默认「爱学习的咸鱼君」；改成别的名字即可，留空则不显示署名栏（只留日期）。"
         },
         "lgAssist.banshu.course": {
           "type": "string",
@@ -200,6 +200,62 @@
           "type": "string",
           "default": "89%",
           "description": "板书图在题解里的宽度（Typst 长度表达式，如 89% 或 16cm）。多页会逐页按这个宽度插入。"
+        },
+        "lgAssist.cover.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "建题时自动生成题目封面（调 BiliBiliHelper，落进题目录里的 <题号> 封面.png）。没装 BiliBiliHelper 的机器不用管：它会静默跳过，只在输出面板留一行日志（关掉这一项连日志也没有）。"
+        },
+        "lgAssist.cover.command": {
+          "type": "string",
+          "default": "bili-helper",
+          "description": "封面生成命令（BiliBiliHelper 的 CLI）。默认从 PATH 找 bili-helper；装了但不在 PATH 时填可执行文件完整路径，例如 C:\\\\Users\\\\me\\\\BiliBiliHelper\\\\.venv\\\\Scripts\\\\bili-helper.exe。也可以用 args + projectDir 走「python 跑源码」，见那两项。"
+        },
+        "lgAssist.cover.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "封面命令的前缀参数。用源码方式跑时填 [\"-m\", \"bili_assistant.cli\"]，并把 command 设成 python、projectDir 指向 BiliBiliHelper 项目根。"
+        },
+        "lgAssist.cover.projectDir": {
+          "type": "string",
+          "default": "",
+          "description": "封面命令的工作目录。**用 `python -m bili_assistant.cli` 时必须填 BiliBiliHelper 的项目根目录** —— 否则 python 找不到 bili_assistant 包（ModuleNotFoundError）。用 bili-helper.exe 时可以留空。"
+        },
+        "lgAssist.cover.template": {
+          "type": "string",
+          "default": "",
+          "description": "封面模板（series / dark-tech / minimal）。留空 = 用 BiliBiliHelper 自己 config.toml 里的默认。"
+        },
+        "lgAssist.cover.palette": {
+          "type": "string",
+          "default": "",
+          "description": "封面配色（blue / purple / warm / dark）。留空 = 用 BiliBiliHelper 的默认。"
+        },
+        "lgAssist.cover.size": {
+          "type": "string",
+          "default": "",
+          "description": "封面尺寸，如 1146x717（B 站封面比例）。留空 = 用 BiliBiliHelper 的默认。"
+        },
+        "lgAssist.cover.fileName": {
+          "type": "string",
+          "default": "${id} 封面.png",
+          "description": "封面文件名模板，${id} 会换成题号。默认与题解目录里的 <题号> 板书.png 同一套命名。"
+        },
+        "lgAssist.cover.extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "追加到封面命令行末尾的原始参数，例如 [\"--ai-bg\"] 开 AI 背景（**按次计费**）、[\"--refresh\"] 忽略缓存重新抓题面。同名的后出现的胜出。"
+        },
+        "lgAssist.cover.timeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "description": "生成封面的超时时间（毫秒）。一张要起一次 Playwright，冷启动十几秒是正常的；下限 5 秒。"
         },
         "lgAssist.submit.compileFirst": {
           "type": "boolean",
@@ -330,6 +386,12 @@
         "category": "洛谷助手",
         "title": "写入/重建题解共享版式",
         "icon": "$(settings-gear)"
+      },
+      {
+        "command": "lgAssist.createCover",
+        "category": "洛谷助手",
+        "title": "生成题目封面（BiliBiliHelper）",
+        "icon": "$(device-camera)"
       },
       {
         "command": "lgAssist.refresh",

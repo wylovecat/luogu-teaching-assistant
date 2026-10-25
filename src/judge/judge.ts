@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
@@ -227,11 +228,54 @@ export async function judgeFile(sourcePath: string): Promise<JudgeReport> {
   if (samples.length === 0) {
     return { compile: compiled, cases: [], sourcePath, noSamples: true, sourceHash };
   }
-  const cases: CaseResult[] = [];
-  for (const s of samples) {
-    cases.push(await runCase(compiled.exe, s));
-  }
+  const cases: CaseResult[] = await mapBounded(samples, judgeConcurrency(), (s) => runCase(compiled.exe, s));
   return { compile: compiled, cases, sourcePath, noSamples: false, sourceHash };
+}
+
+/**
+ * 同时跑几个样例。
+ *
+ * 串行时等待时间是**按样例数线性放大**的：默认限时 10 秒（`judge.timeoutMs`），
+ * 学生写出死循环、一道 10 个样例的题点一次「重新评测」要等 100 秒 —— 而他改一版就是一次。
+ * 这是本地评测里最容易被感觉到的一段，所以把它压成几批。
+ *
+ * 上限取 `核数 - 1` 且封顶 4：留一格给编辑器与宿主进程，全占满会让界面卡顿（老师正在讲题）；
+ * 封顶是因为再多也只是让每个进程分到的时间片更少，`durationMs` 会一起虚高。
+ * 单核机器（精简虚拟机 / 部分 CI 容器）上退化成 1，也就是原来的串行行为。
+ *
+ * 参数化 `cpus` 而不是直接读 `os.cpus()`：跟 `cacheRoot(platform)` / `exeNameFor(stem)` 同一套约定，
+ * 测试要能显式传值，不依赖跑测试那台机器的核数。
+ */
+export function judgeConcurrency(cpus: number = os.cpus().length): number {
+  return Math.max(1, Math.min(4, Math.floor(cpus) - 1));
+}
+
+/**
+ * 有界并发地跑一批异步任务，**结果按输入顺序回填**。
+ *
+ * 顺序这一条是硬要求：`CaseResult.index` 与面板上的样例编号都靠它，
+ * 并发完成顺序不同 ≠ 展示顺序可以乱。
+ *
+ * 单独抽出来是因为「并发度有界」和「顺序不乱」这两条都得有测试盯着，而拿真实编译产物
+ * 去测时序在 CI 上会飘；用小任务加计数器就能确定性地钉住。
+ */
+export async function mapBounded<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      // 取号是同步自增，单线程的事件循环里不会有两个 worker 拿到同一个 i
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 export async function runCase(exe: string, sample: SampleCase): Promise<CaseResult> {

@@ -26,13 +26,16 @@ import {
   DOC_FILE,
   PDF_FILE,
   acCodeName,
+  banshuImageWidth,
+  blockBody,
+  blockSpan,
   buildBanshuDoc,
   codeBlockBody,
   replaceBlock,
 } from "../banshu/template";
 import { compileTypst, TypstNotFoundError, typstFailureMessage } from "../banshu/typst";
 import { problemDir, workspaceRoot } from "../problems/files";
-import { stemOf } from "../util";
+import { sameFilePath, stemOf } from "../util";
 import { Controller } from "./base";
 
 export class BanshuController extends Controller {
@@ -76,7 +79,7 @@ export class BanshuController extends Controller {
       this.writeConfIfAbsent();
       fs.writeFileSync(path.join(dir, acCodeName(displayId)), code, "utf8");
       const docPath = await this.ensureDocFile(dir, displayId, "");
-      this.updateBlock(docPath, "code", codeBlockBody(displayId));
+      await this.updateBlock(docPath, "code", codeBlockBody(displayId));
       output.appendLine(`[题解] 已把 AC 代码写进题解（${acCodeName(displayId)}）`);
     } catch (e) {
       output.appendLine(`[题解] 写入 AC 代码失败：${this.messageOf(e)}`);
@@ -93,13 +96,15 @@ export class BanshuController extends Controller {
       const docPath = await this.ensureDocFile(dir, displayId, "");
       // 用落盘后的真实文件名（面板按约定命名，但以磁盘为准更稳）
       const names = files.map((f) => path.basename(f));
+      // 宽度先清洗：这个值是原样拼进 Typst 源码的，坏值会让整份 PDF 编译不过
+      const width = banshuImageWidth(cfg.imageWidth);
       const body = names
         .map((n, i) => {
-          const img = `#image("${n}", width: ${cfg.imageWidth})`;
+          const img = `#image("${n}", width: ${width})`;
           return i === 0 ? img : `\n${img}`;
         })
         .join("\n");
-      this.updateBlock(docPath, "image", body);
+      await this.updateBlock(docPath, "image", body);
       output.appendLine(`[题解] 已插入 ${names.length} 张板书图`);
     } catch (e) {
       this.reportError("插入板书图失败", e);
@@ -244,8 +249,41 @@ export class BanshuController extends Controller {
     return docPath;
   }
 
-  /** 替换题解文档里的标记块；块被删了就把话说清楚，别静默失败。 */
-  private updateBlock(docPath: string, key: string, body: string): void {
+  /**
+   * 替换题解文档里的标记块；块被删了就把话说清楚，别静默失败。
+   *
+   * ⚠️ **文档在编辑器里开着时走 WorkspaceEdit，不要直接改盘**。
+   * 直接 `fs.writeFileSync` 会和老师未保存的改动打架：编辑器缓冲区里的那份才是
+   * 「活」的，磁盘上刚写进去的内容会被他下一次保存覆盖回去 —— 症状就是
+   * 「点了没反应，题解里还是老的」。走 WorkspaceEdit 改的是缓冲区，两边都保住。
+   * 文档没开时仍然直接改盘（省得把它开成个脏文档）。
+   *
+   * 改动只覆盖标记之间的那几个字（最小编辑），文档其余部分一个字节都不动。
+   */
+  private async updateBlock(docPath: string, key: string, body: string): Promise<void> {
+    const open = (vscode.workspace.textDocuments ?? []).find((d) => sameFilePath(d.uri.fsPath, docPath));
+    if (open) {
+      const content = open.getText();
+      let span: { from: number; to: number };
+      try {
+        span = blockSpan(content, key);
+      } catch (e) {
+        void vscode.window.showWarningMessage(
+          `${this.messageOf(e)}。请恢复题解文档里那段标记后再试（或用「生成题解文档」重建）。`,
+        );
+        return;
+      }
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(
+        open.uri,
+        new vscode.Range(open.positionAt(span.from), open.positionAt(span.to)),
+        blockBody(body),
+      );
+      await vscode.workspace.applyEdit(edit);
+      // 存盘：Typst 编译读的是磁盘上的文件，编辑器里改了不存，PDF 还是旧的
+      await open.save();
+      return;
+    }
     const content = fs.readFileSync(docPath, "utf8");
     try {
       fs.writeFileSync(docPath, replaceBlock(content, key, body), "utf8");

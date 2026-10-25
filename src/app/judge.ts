@@ -25,7 +25,7 @@ export class JudgeController extends Controller {
       return;
     }
     publishCompileResult(file, res);
-    runProgram(res.exe, path.dirname(file), { title: `运行 ${path.basename(file)}` });
+    runProgram(res.exe, path.dirname(file), { title: `运行 ${path.basename(file)}`, sourceFile: file });
   }
 
   async runSamples(): Promise<void> {
@@ -43,7 +43,12 @@ export class JudgeController extends Controller {
         "在终端运行",
         "取消",
       );
-      if (pick === "在终端运行") runProgram(report.compile.exe, path.dirname(file), { title: `运行 ${path.basename(file)}` });
+      if (pick === "在终端运行") {
+        runProgram(report.compile.exe, path.dirname(file), {
+          title: `运行 ${path.basename(file)}`,
+          sourceFile: file,
+        });
+      }
     }
   }
 
@@ -58,11 +63,13 @@ export class JudgeController extends Controller {
         runProgram(report.compile.exe, path.dirname(report.sourcePath), {
           inputFile: inputFile ?? undefined,
           title: `运行 ${path.basename(report.sourcePath)}`,
+          sourceFile: report.sourcePath,
         });
       },
       onOpenSource: () => void vscode.window.showTextDocument(vscode.Uri.file(report.sourcePath), { preview: false }),
       onGotoLocation: (line, column) => void this.gotoLocation(report.sourcePath, line, column),
       onSubmit: () => this.host.submitFromJudge(report),
+      onOpenRecord: (rid) => void vscode.env.openExternal(vscode.Uri.parse(`https://www.luogu.com.cn/record/${rid}`)),
     });
   }
 
@@ -80,6 +87,9 @@ export class JudgeController extends Controller {
   }
 
   private async rerunJudge(file: string): Promise<void> {
+    // 重新评测前先存盘：评测读的是磁盘上的文件，老师在编辑器里改了没保存的话，
+    // 跑的还是上一版 —— 「我明明改了怎么还是错的」就是这么来的。
+    await this.readSource(file);
     const report = await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: "正在重新评测…" },
       () => judgeFile(file),

@@ -486,6 +486,19 @@ function fileStemPart(text: string): string {
     .replace(/[. ]+$/, "");
 }
 
+/**
+ * 多页导出时，第 2 页往后的文件名主干。
+ *
+ * 输入是用户在保存框里定的那个文件名（去掉 `.png`）。**只剥结尾那一个 `-p1`** ——
+ * 那是保存框默认名 `<题名>-p1.png` 里我们自己加的页码。
+ *
+ * ⚠️ 早先这里剥的是 `/-p\d+$/`：用户把文件命名成 `foo-p3.png` 时页码被一起剥掉，
+ * 第 3 页就写回 `foo-p3.png` —— **把第 1 页覆盖了**，导出的讲义凭空少一页。
+ */
+export function multiPageFileStem(fileName: string): string {
+  return (fileName ?? "").replace(/\.png$/i, "").replace(/-p1$/i, "");
+}
+
 /** 每个题号一份批注，存 workspaceState */
 export function whiteboardStateKey(displayId: string): string {
   const id = (displayId || "").trim() || "untitled";

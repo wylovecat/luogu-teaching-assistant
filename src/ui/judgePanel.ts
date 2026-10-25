@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import * as path from "node:path";
 import type { CaseResult, JudgeReport, CaseStatus } from "../judge/judge";
 import { parseCompileDiagnostics, type CompileDiagnostic } from "../judge/diagnostics";
+import { sameFilePath } from "../util";
 import { buildWebviewHtml, BASE_STYLE } from "./html";
 import { escapeHtml } from "./markdown";
 
@@ -39,6 +40,38 @@ export interface JudgePanelCallbacks {
   onGotoLocation(line: number, column: number | null): void;
   /** 把当前代码提交到题目；完成（或失败）后按钮恢复可点 */
   onSubmit(): Promise<void>;
+  /** 打开洛谷评测记录页（提交结果卡片上的「到洛谷查看记录」） */
+  onOpenRecord(rid: number): void;
+}
+
+/**
+ * 提交到洛谷的结果，直接嵌在评测面板里。
+ *
+ * 为什么不用通知：判定的信息量不止一句结论 —— 分数、耗时、内存、编译报错都得看，
+ * 通知（右下角弹一下就没了）装不下这些，而且用户要的是「就在这里看完」，
+ * 不必点按钮跳到浏览器。通知仍然保留（切到别的窗口时是个提醒），但这里才是主场。
+ */
+export interface SubmitOutcome {
+  /** 提交的是哪个源文件（绝对路径）。面板据此判断「这份结果是不是我现在显示的那份代码」。 */
+  sourcePath: string;
+  /** 提交是否成功走到「拿到结果」这一步 */
+  ok: boolean;
+  /** 洛谷评测记录号；提交失败时为 0 */
+  rid: number;
+  /** 判定码（AC / WA / TLE…）；拿不到结果时为空串 */
+  verdict: string;
+  /** 一行摘要：`通过（AC） · 100 分 · 12 ms · 1.2 MB` */
+  summary: string;
+  /** 评测记录的补充说明（CE 的编译报错就走这里） */
+  feedback: string;
+  /** 分数 / 耗时 / 内存（未知为 null） */
+  score: number | null;
+  timeMs: number | null;
+  memoryMb: number | null;
+  /** 失败时的原因（登录过期、网络、超时……） */
+  error: string;
+  /** 提交时间（`HH:MM:SS`），调用方生成 */
+  at: string;
 }
 
 /** 面板里的编译问题：列号可能是「编译器没给」，跳转时按第 1 列处理。 */
@@ -157,7 +190,14 @@ class JudgePanel {
   ) {
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
     this.panel.webview.onDidReceiveMessage(
-      async (msg: { command?: string; inputFile?: string; line?: number; column?: number | null }) => {
+      async (msg: {
+        command?: string;
+        inputFile?: string;
+        line?: number;
+        column?: number | null;
+        /** `openRecord`：要打开的洛谷评测记录号 */
+        rid?: number;
+      }) => {
         if (msg.command === "rerun") this.callbacks.onRerun();
         else if (msg.command === "runTerminal") this.callbacks.onRunInTerminal(msg.inputFile ?? null);
         else if (msg.command === "openSource") this.callbacks.onOpenSource();
@@ -170,6 +210,8 @@ class JudgePanel {
           } finally {
             if (!this.closed) void this.panel.webview.postMessage({ command: "submitDone" });
           }
+        } else if (msg.command === "openRecord" && typeof msg.rid === "number") {
+          this.callbacks.onOpenRecord(msg.rid);
         }
       },
       null,
@@ -195,6 +237,26 @@ class JudgePanel {
       retainContextWhenHidden: true,
     });
     JudgePanel.current = new JudgePanel(panel, report, callbacks);
+  }
+
+  /**
+   * 把一次提交的结果推给面板。
+   *
+   * 面板没开时**不强开**：提交入口在编辑器命令与快捷键里都有，
+   * 用户没在看评测面板时弹一个面板出来会打断他手头的事 —— 那种情况通知就够了。
+   * 面板开着时就地刷新，不需要重新评测。
+   *
+   * ⚠️ **面板显示的是另一份代码时不能把结果挂上去**。面板是单例复用的：
+   * A 题评测开着面板 → 切去 B 题提交 → 结果直接贴上来就成了
+   * 「A 题的样例下面挂着 B 题的提交结果」，比不显示更难解释。
+   * 这时返回 false，让调用方退回通知。
+   */
+  static publishSubmit(outcome: SubmitOutcome): boolean {
+    const panel = JudgePanel.current;
+    if (!panel || panel.closed) return false;
+    if (!sameFilePath(panel.report.sourcePath, outcome.sourcePath)) return false;
+    void panel.panel.webview.postMessage({ command: "submitResult", outcome });
+    return true;
   }
 
   private render(): void {
@@ -264,6 +326,16 @@ class JudgePanel {
   ${totalMs ? `<span class="oi-chip"><em>总耗时</em>${totalMs} ms</span>` : ""}
 </div>`;
 
+    /*
+     * 提交结果区：一开始是空的（只有一行说明），点了「提交到洛谷」之后由扩展把结果
+     * postMessage 进来再填。放在结论区下面、编译问题上面 —— 提交是这里最重的事，
+     * 不该埋在样例列表后面，但也不必占掉第一位（样例结果才是这个面板的日常用途）。
+     */
+    const submitBlock = `<section id="submit-result" class="oi-submit" hidden>
+  <h2>提交结果<small class="muted" id="submit-at"></small></h2>
+  <div id="submit-body"></div>
+</section>`;
+
     // 编译问题：逐条列出（能点着跳到出错行），原始输出收在下面的 details 里
     const problemList = data.problems.length
       ? `<h2>编译问题<small class="muted"> ${data.errorCount} 错误 · ${data.warningCount} 警告</small></h2>` +
@@ -294,6 +366,7 @@ class JudgePanel {
   <button id="openSource" class="secondary">回到源文件</button>
 </div>
 ${verdict}
+${submitBlock}
 ${problemList}
 ${compileOutput}
 ${this.report.noSamples && data.compileOk ? `<p class="muted">已编译成功。当前题目没有可用样例，建议在终端里手工输入数据运行。</p>` : ""}
@@ -387,10 +460,54 @@ submitBtn.addEventListener('click', () => {
   submitBtn.textContent = '提交中…';
   vscode.postMessage({ command:'submit' });
 });
+
+/*
+ * 提交结果渲染。判定色只落在左侧竖条与判定文字上 —— 与面板其它地方一致，
+ * 不做大面积填充。分数/耗时/内存用小 chip 排一行，和结论区的视觉语言对齐。
+ */
+const SUBMIT_VERDICT_CLASS = {
+  AC:'ac', WA:'wa', TLE:'tle', RE:'re', CE:'wa', MLE:'wa', OLE:'wa', UKE:'none', NAC:'none'
+};
+function renderSubmit(o) {
+  const box = document.getElementById('submit-result');
+  const body = document.getElementById('submit-body');
+  document.getElementById('submit-at').textContent = o.at ? ' · ' + o.at : '';
+  if (!o.ok) {
+    body.innerHTML = '<div class="oi-submit-card is-err">' +
+      '<div class="oi-submit-line"><span class="oi-submit-state is-err">提交失败</span></div>' +
+      '<p class="muted">' + esc(o.error || '未知原因') + '</p></div>';
+    box.hidden = false;
+    return;
+  }
+  const cls = SUBMIT_VERDICT_CLASS[o.verdict] || 'none';
+  const chips = [];
+  if (o.score !== null) chips.push('<span class="oi-chip"><em>分数</em>' + o.score + '</span>');
+  if (o.timeMs !== null) chips.push('<span class="oi-chip"><em>耗时</em>' + o.timeMs + ' ms</span>');
+  if (o.memoryMb !== null) chips.push('<span class="oi-chip"><em>内存</em>' + o.memoryMb.toFixed(1) + ' MB</span>');
+  if (o.rid) chips.push('<span class="oi-chip"><em>记录</em>#' + o.rid + '</span>');
+  const fb = o.feedback && o.feedback.trim()
+    ? '<pre class="err">' + esc(o.feedback) + '</pre>'
+    : '';
+  const link = o.rid
+    ? '<div class="oi-submit-actions"><button class="secondary tiny" id="openRecord">到洛谷查看记录</button></div>'
+    : '';
+  body.innerHTML = '<div class="oi-submit-card is-' + cls + '">' +
+    '<div class="oi-submit-line">' +
+      '<span class="oi-submit-verdict mono is-' + cls + '" title="' + esc(o.verdict) + '">' + esc(o.verdict || '?') + '</span>' +
+      '<span class="oi-submit-summary">' + esc(o.summary || '') + '</span>' +
+      '<span class="oi-grow"></span>' +
+      chips.join('') +
+    '</div>' + fb + link + '</div>';
+  const btn = document.getElementById('openRecord');
+  if (btn) btn.addEventListener('click', () => vscode.postMessage({ command:'openRecord', rid: o.rid }));
+  box.hidden = false;
+}
 window.addEventListener('message', (ev) => {
   if (ev.data && ev.data.command === 'submitDone') {
     submitBtn.disabled = false;
     submitBtn.textContent = '提交到洛谷';
+  } else if (ev.data && ev.data.command === 'submitResult') {
+    renderSubmit(ev.data.outcome);
   }
 });`;
 
@@ -436,6 +553,34 @@ window.addEventListener('message', (ev) => {
 .oi-state.is-tle { color: var(--oi-tle); }
 .oi-state.is-re { color: var(--oi-re); }
 .oi-tally { font-size: .88em; color: var(--vscode-descriptionForeground); }
+
+/*
+ * 提交结果卡片：与结论区同一套语言 —— 左侧一道判定色竖条，判定码等宽大号，
+ * 分数/耗时/内存是小 chip。整片底色不铺，只有失败时的错误文案块给一点点淡底。
+ */
+.oi-submit-card {
+  border: 1px solid var(--vscode-panel-border); border-radius: 5px;
+  border-left: 3px solid var(--vscode-editor-foreground);
+  padding: 12px 14px; margin: 0 0 20px;
+}
+.oi-submit-card.is-ac { border-left-color: var(--oi-ac); }
+.oi-submit-card.is-wa { border-left-color: var(--oi-wa); }
+.oi-submit-card.is-tle { border-left-color: var(--oi-tle); }
+.oi-submit-card.is-re { border-left-color: var(--oi-re); }
+.oi-submit-card.is-none { border-left-color: var(--vscode-descriptionForeground); }
+.oi-submit-card.is-err { border-left-color: var(--oi-wa); }
+.oi-submit-line { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.oi-submit-verdict { font-size: 1.5em; font-weight: 700; letter-spacing: -.02em; }
+.oi-submit-verdict.is-ac { color: var(--oi-ac); }
+.oi-submit-verdict.is-wa { color: var(--oi-wa); }
+.oi-submit-verdict.is-tle { color: var(--oi-tle); }
+.oi-submit-verdict.is-re { color: var(--oi-re); }
+.oi-submit-verdict.is-none { color: var(--vscode-descriptionForeground); }
+.oi-submit-summary { font-size: .95em; }
+.oi-submit-state { font-weight: 600; }
+.oi-submit-state.is-err { color: var(--oi-wa); }
+.oi-submit-card pre.err { margin-top: 10px; }
+.oi-submit-actions { margin-top: 10px; }
 
 h2 small { font-size: .8em; font-weight: 400; margin-left: .5em; }
 

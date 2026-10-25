@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { Statement } from "../problems/statement";
+import { clampFontScale, DEFAULT_FONT_SCALE, FONT_SCALE_KEY, FONT_SCALE_MAX, FONT_SCALE_MIN, FONT_SCALE_STEP } from "./fontScale";
 import { buildWebviewHtml, BASE_STYLE } from "./html";
 import { escapeHtml, renderMarkdownBody } from "./markdown";
 
@@ -36,6 +37,11 @@ export function statementToSource(s: Statement): string {
 class StatementPanel {
   static current: StatementPanel | undefined;
   private disposables: vscode.Disposable[] = [];
+  /**
+   * 正文字号缩放（1 = 原样）。**会话内权威**：点击后同步更新，globalState 只是持久副本。
+   * 换题复用面板时字段不重置 → 字号保留；关面板重开则由构造函数从 globalState 恢复。
+   */
+  private fontScale: number;
 
   private constructor(
     private readonly panel: vscode.WebviewPanel,
@@ -46,8 +52,14 @@ class StatementPanel {
     /** 旁注标记（洛谷传难度标签，如「普及-」），只是「这道题什么档」的注脚；留空则不显示 */
     private badge: string,
   ) {
+    // 从 globalState 恢复字号（脏值在 clampFontScale 里被拉回合法档）
+    this.fontScale = clampFontScale(Number(this.context.globalState.get(FONT_SCALE_KEY, DEFAULT_FONT_SCALE)));
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
-    this.panel.webview.onDidReceiveMessage((msg: { command?: string }) => this.onMessage(msg), null, this.disposables);
+    this.panel.webview.onDidReceiveMessage(
+      (msg: { command?: string; scale?: number }) => this.onMessage(msg),
+      null,
+      this.disposables,
+    );
     this.render();
   }
 
@@ -76,7 +88,7 @@ class StatementPanel {
     StatementPanel.current = new StatementPanel(panel, context, statement, actions, badge);
   }
 
-  private onMessage(msg: { command?: string }): void {
+  private onMessage(msg: { command?: string; scale?: number }): void {
     switch (msg.command) {
       case "create":
         void this.actions.onCreate();
@@ -89,6 +101,15 @@ class StatementPanel {
         break;
       case "whiteboard":
         void this.actions.onOpenWhiteboard();
+        break;
+      case "fontScale":
+        /*
+         * 字号：前端点一下就地改 CSS 变量生效了（不重渲染），这里只负责「记住」。
+         * 权威拉一次夹紧（防脏值/缺失 → 回落默认），同步更新 this.fontScale（会话内立即一致），
+         * globalState 异步落盘 —— 与同方法里 void this.actions.* 一样是 fire-and-forget。
+         */
+        this.fontScale = clampFontScale(Number(msg.scale));
+        void this.context.globalState.update(FONT_SCALE_KEY, this.fontScale);
         break;
     }
   }
@@ -119,8 +140,20 @@ class StatementPanel {
           .join("")}</span>`
       : "";
 
+    /*
+     * 字号控件：A− / 读数 / A+ 的步进组，放工具栏左侧（视图控件），与右侧动作按钮用 oi-grow 隔开。
+     * 静态就把读数与禁用态按当前字号注入，免得脚本跑之前闪一下错误状态。
+     */
+    const fontPct = Math.round(this.fontScale * 100);
+    const fontCtl = `<span class="font-ctl" role="group" aria-label="正文字号">
+  <button id="fontDown" class="secondary" title="减小正文字号" aria-label="减小正文字号"${this.fontScale <= FONT_SCALE_MIN ? " disabled" : ""}>A−</button>
+  <span id="fontScale" class="mono font-readout">${fontPct}%</span>
+  <button id="fontUp" class="secondary" title="增大正文字号" aria-label="增大正文字号"${this.fontScale >= FONT_SCALE_MAX ? " disabled" : ""}>A+</button>
+</span>`;
+
     const body = `<div class="toolbar">
   ${this.badge ? `<span class="badge">${escapeHtml(this.badge)}</span>` : ""}
+  ${fontCtl}
   <span class="oi-grow"></span>
   <button id="create" title="在题目目录里创建 .cpp、样例与题面 md">创建题目文件</button>
   <button id="whiteboard" class="secondary">打开白板</button>
@@ -140,13 +173,45 @@ const vscode = acquireVsCodeApi();
 for (const [id, command] of [['create','create'],['whiteboard','whiteboard'],['openMd','openMd'],['copySamples','copySamples']]) {
   const el = document.getElementById(id);
   if (el) el.addEventListener('click', () => vscode.postMessage({ command }));
-}`;
+}
+
+/*
+ * 正文字号：点一下就地改 --oi-font-scale（body font-size 乘它；标题/代码都是 em 会一起缩放），
+ * 不重渲染面板（重渲染会跳回顶部、重跑 KaTeX）。改完把目标值发给扩展去持久化（globalState）。
+ * 常量由扩展注入，扩展侧 src/ui/fontScale.ts 是唯一出处。
+ */
+const FONT_MIN = ${FONT_SCALE_MIN}, FONT_MAX = ${FONT_SCALE_MAX}, FONT_STEP = ${FONT_SCALE_STEP};
+let fontScale = ${this.fontScale};
+const fontDown = document.getElementById('fontDown');
+const fontUp = document.getElementById('fontUp');
+const fontReadout = document.getElementById('fontScale');
+const round1 = (n) => Math.round(n * 10) / 10;
+const clampFont = (n) => Math.min(FONT_MAX, Math.max(FONT_MIN, round1(n)));
+function renderFont(n) {
+  fontScale = clampFont(n);
+  document.documentElement.style.setProperty('--oi-font-scale', fontScale);
+  if (fontReadout) fontReadout.textContent = Math.round(fontScale * 100) + '%';
+  if (fontDown) fontDown.disabled = fontScale <= FONT_MIN;
+  if (fontUp) fontUp.disabled = fontScale >= FONT_MAX;
+}
+renderFont(fontScale);
+if (fontDown) fontDown.addEventListener('click', () => { renderFont(fontScale - FONT_STEP); vscode.postMessage({ command: 'fontScale', scale: fontScale }); });
+if (fontUp) fontUp.addEventListener('click', () => { renderFont(fontScale + FONT_STEP); vscode.postMessage({ command: 'fontScale', scale: fontScale }); });`;
 
     this.panel.webview.html = buildWebviewHtml({
       webview: this.panel.webview,
       title: `${s.displayId} ${s.title}`,
       stylesheets: [katexCss.toString()],
       style: `${BASE_STYLE}
+/*
+ * 正文字号缩放：--oi-font-scale 由扩展注入当前值（脚本跑之前就是对的，无闪烁），点击时脚本就地改它。
+ * 只覆盖 body 的 font-size，其余属性仍走 BASE_STYLE；标题/代码/表格都是 em 相对正文，会一起等比缩放。
+ * ⚠️ 这段是题面面板专属：别挪进共享的 BASE_STYLE，否则会改到白板纸面的字号。
+ */
+:root { --oi-font-scale: ${this.fontScale}; }
+body { font-size: calc(var(--vscode-font-size) * var(--oi-font-scale)); }
+.font-ctl { display: inline-flex; align-items: center; gap: 3px; }
+.font-readout { font-size: .84em; min-width: 40px; text-align: center; color: var(--vscode-descriptionForeground); }
 /* 题号是这道题的身份：等宽、加粗、带一圈淡边，题名退为叙事层 */
 .oi-doc-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin: 4px 0 0; }
 .oi-doc-id {

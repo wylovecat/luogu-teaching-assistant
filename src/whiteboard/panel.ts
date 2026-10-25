@@ -21,6 +21,7 @@ import {
   clampExportDpi,
   clampPageCount,
   exportPixels,
+  multiPageFileStem,
   sanitizeStrokes,
   strokesToPersist,
   whiteboardFileStem,
@@ -29,6 +30,7 @@ import {
   type Stroke,
 } from "./model";
 import { buildWhiteboardHtml } from "./panelHtml";
+import { inlineRemoteImages, MAX_INLINE_IMAGES } from "./remoteImage";
 import { whiteboardStatementMarkdown } from "./source";
 
 const VIEW_TYPE = "lgAssist.whiteboard";
@@ -55,6 +57,8 @@ interface WebviewMessage {
   pages?: number;
   /** export：导出目标。`"banshu"` = 落进题目录并写进题解（不弹保存框） */
   target?: string;
+  /** inlineImages：导出前要内联的题面图片地址 */
+  urls?: unknown;
 }
 
 export interface WhiteboardOptions {
@@ -225,6 +229,21 @@ class WhiteboardPanel {
         void this.panel.webview.postMessage({ command: "exportCss", css: css.css, ok: css.ok });
         return;
       }
+      case "inlineImages": {
+        // SVG foreignObject 当图片加载时不会取外部资源：先把题面里的网络图片下载成
+        // data URI 回给 webview，替换 src 后再序列化。失败只记日志，不挡导出。
+        const urls = Array.isArray(msg.urls)
+          ? msg.urls.filter((u): u is string => typeof u === "string").slice(0, MAX_INLINE_IMAGES)
+          : [];
+        const { images, failed } = await inlineRemoteImages(urls);
+        if (failed.length) {
+          output.appendLine(
+            `[白板] 题面图片内联失败 ${failed.length} 张：${failed.slice(0, 3).join("；")}${failed.length > 3 ? " …" : ""}`,
+          );
+        }
+        void this.panel.webview.postMessage({ command: "inlinedImages", images });
+        return;
+      }
       case "export": {
         await this.saveImages(msg.images ?? [], Boolean(msg.blank), msg.target === "banshu");
         return;
@@ -343,10 +362,13 @@ class WhiteboardPanel {
     }
 
     const dir = path.dirname(targetPath);
-    const stem = path
-      .basename(targetPath)
-      .replace(/\.png$/i, "")
-      .replace(/-p\d+$/i, "");
+    /*
+     * 页码后缀只剥**我们自己加的那个** `-p1`（保存框的默认名就是 `<题名>-p1.png`）。
+     *
+     * 原来这里剥的是 `/-p\d+$/`：用户把文件命名成 `foo-p3.png` 时页码被一起剥掉，
+     * 第 3 页就写回 `foo-p3.png` —— **把第 1 页覆盖了**（导出的讲义少一页）。
+     */
+    const stem = multiPageFileStem(path.basename(targetPath));
     const written: string[] = [];
     images.forEach((dataUrl, i) => {
       const file = i === 0 ? targetPath : path.join(dir, `${stem}-p${i + 1}.png`);

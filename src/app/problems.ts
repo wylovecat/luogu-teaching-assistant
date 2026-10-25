@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { problemsConfig } from "../config";
-import { createProblemFiles, workspaceRoot } from "../problems/files";
+import { createProblemFiles, problemDir, workspaceRoot } from "../problems/files";
 import type { ProblemRef } from "../problems/link";
 import { difficultyLabel, statementToMarkdown, type Statement } from "../problems/statement";
 import { planProblemDisplay } from "../ui/layout";
@@ -140,6 +140,11 @@ export class ProblemsController extends Controller {
     // 放在打开文件之前 —— 出问题也只记日志，不该拦住主流程。
     await this.host.ensureBanshuDoc(ref.displayId, title);
 
+    // 封面：调 BiliBiliHelper 渲染进题目录（幂等，已存在即跳过）。
+    // **刻意不 await** —— 一次渲染要 7 秒左右（真机实测），老师要的是源文件马上打开；
+    // ensureCoverImage 自己吞掉所有异常，不会变成未处理的 rejection。
+    void this.host.ensureCoverImage(ref.displayId, created.dir);
+
     // 布局：题面（面板或题面 md）先占左栏，源文件贴着它开到右侧
     const plan = planProblemDisplay({
       openMode: problemsConfig().openStatement,
@@ -221,6 +226,10 @@ export class ProblemsController extends Controller {
             title: statement.title,
             difficulty: statement.difficulty,
           });
+          // 与「按题号创建」共用同一条封面路径（题解文档那条不在这里补：
+          // 面板上的「生成/打开题解板书」本来就会建，别把它的时机悄悄改掉）
+          const madeId = path.basename(made.cppPath, ".cpp");
+          void this.host.ensureCoverImage(madeId, made.dir);
           // 面板在左栏，源文件开在它右侧
           await this.openCreatedSource(made.cppPath, vscode.ViewColumn.Beside);
           await this.refreshCurrentRef();
@@ -247,7 +256,7 @@ export class ProblemsController extends Controller {
   private async writeTempStatementMarkdown(statement: Statement): Promise<string | null> {
     const root = workspaceRoot();
     if (!root) return null;
-    const dir = path.join(root, problemsConfig().bankDir, statement.displayId);
+    const dir = problemDir(root, statement.displayId);
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${statement.displayId}.md`);
     fs.writeFileSync(file, statementToMarkdown(statement), "utf8");

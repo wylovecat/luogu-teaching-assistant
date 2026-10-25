@@ -5,8 +5,9 @@
 ## 一句话定位
 
 面向信息学奥赛（OI）教学的 **VS Code 扩展**：从洛谷抓题建文件并拉样例、本地样例评测、提交代码到洛谷、
-把代码导出成 PNG、在题面上用数位笔画批注并导出 A4 图片。纯 TS，esbuild 打包，无原生模块，
-一个 `.vsix` 通吃 Linux / macOS / Windows。
+把代码导出成 PNG、在题面上用数位笔画批注并导出 A4 图片、把板书与 AC 代码整理成 Typst 题解 PDF。
+建题时还会调隔壁 `E:\BiliBiliHelper` 生成题目封面（见「题目封面」一节）。纯 TS，esbuild 打包，
+无原生模块，一个 `.vsix` 通吃 Linux / macOS / Windows。
 
 **与爱思创那版（`oi-teaching-assistant`）的关系**：本项目从它拆出。`whiteboard/` `judge/` `terminal/`
 `imgexport/` `ui/` `problems/statement` 这一层是站点无关的通用层，整体搬了过来；
@@ -118,6 +119,14 @@ CSRF 只走头、body 里没有 csrf 域，`Origin` 与 `X-Requested-With: XMLHt
    而不是把可能的中间态当结果报出去）；表里的值一条一条都有出处，别凭印象加。
    （`RecordStatus` 枚举**已核对**：`-1` Unshown、`0` Waiting、`1` Judging 是中间态，
    2=CE、3=OLE、4=MLE、5=TLE、6=WA、7=RE、11=UKE、12=AC、14=NAC。）
+3. **非 AC 判定要「连续两拍一致 + 留观」才报**（`app/submit.ts` 的 `pollResult`）。
+   站点异步写回时顶层状态可能先落一个看起来像结论的值（典型是 WA），稍后才被真正的
+   TLE 盖掉。所以拿到终局码先不报：AC/CE 直接报（稳定），其余留观
+   `pollIntervalMs * 3` 且与上一拍**同一个判定**（`judgeSignature`）才认。
+   **洛谷没有「验明正身」那一层**（爱思创那版用代码全文比对，本扩展按 rid 精确寻址，
+   天然不会读到上一条提交），也**没有逐测试点判定的依据**（洛谷 `/record/<rid>` 的
+   字段形状还没核对）—— 别把姊妹工程那两段照抄过来。
+   每一拍都要往输出面板留一行 `[评测] 现场`：站点字段再变时，从日志就能看出当时给了什么。
 
 **判定字段曾经踩过的坑**（2026-10-12 真机暴露）：早先照 `record.judgeResult.verdict` 读判定 ——
 那两层都不存在，`rawStatus` 永远是空串，于是**每一次提交都一路轮询到 120 秒超时**，
@@ -133,7 +142,7 @@ CSRF 只走头、body 里没有 csrf 域，`Origin` 与 `X-Requested-With: XMLHt
   （默认 ≥800ms，洛谷比一般 OJ 敏感）、统一的 `_contentOnly` 信封解析、以及登录态过期的统一转换。
 - **纯逻辑模块不许 `import 'vscode'`**：`src/util.ts`、`src/problems/statement.ts`、
   `src/problems/uploadName.ts`、`src/luogu/multipart.ts`、`src/luogu/contract.ts`、`src/judge/diagnostics.ts`、
-  `src/banshu/template.ts`、`src/banshu/typst.ts`、
+  `src/banshu/template.ts`、`src/banshu/typst.ts`、`src/cover/spec.ts`、`src/cover/cli.ts`、
   `src/ui/layout.ts`、`src/ui/theme.ts`、`src/whiteboard/model.ts`、`src/whiteboard/fontCss.ts`。
   它们被 `test/` 直接引用，混进 vscode 依赖会让单元测试整体跑不起来。文件头有相应注释。
   （`src/luogu/client.ts` 因为经 `../config` 间接引到 vscode，**引不进单测** ——
@@ -163,6 +172,34 @@ CSRF 只走头、body 里没有 csrf 域，`Origin` 与 `X-Requested-With: XMLHt
   - 样例保持 `<details>` 渐进披露、默认收起：老师多数时候只看结论那一行。
   - 侧边栏是 `TreeView`，样式由 VS Code 主题接管，**改不了**，别往那儿加 CSS 方案。
 - **站点访问的唯一例外是白板导出**：那里由扩展进程读盘把 KaTeX 字体转 base64 内联，不走 HTTP。
+- **HTTP 请求要传 keep-alive 的 `agent`**（`src/luogu/http.ts`）：globalAgent 的 `keepAlive`
+  是 Node 19 才默认打开的，而 VS Code 自带的 Electron 是 Node 18 —— 不显式传就是每次请求
+  重做 DNS+TCP+TLS。轮询评测每 2 秒一次，一次提交能轮询到 30 次。
+  `maxSockets` 给 5（不给 1：登录探活与排队请求会互等）。
+- **本地评测的样例是有界并发跑的**（`judge/judge.ts` 的 `judgeConcurrency` / `mapBounded`）：
+  并发度 `clamp(核数-1, 1, 4)`，**结果按输入顺序回填**（`CaseResult.index` 与面板编号靠它）。
+  别改回串行：等待时间是按样例数线性放大的（10 个样例 × 10 秒限时 = 100 秒）。
+
+## 几处「看起来是小 bug、实际会咬人」的地方（2026-10-21 修，别改回去）
+
+这四条都是洛谷版自己踩出来的，测试已经钉住：
+
+- **提交锁必须在函数入口上**（`app/submit.ts`）。早先是「检查 `submitting` 在前、置位在真正发请求前」，
+  中间隔着读文件、定位题目、提交前编译三个 await —— 连点两次提交两次都能过检查，
+  站点上就多出一条重复记录。洛谷的 POST 明确**绝不能自动重试**，重复提交比一次失败更难收拾。
+- **题解 `.typ` 的写入：文档在编辑器里开着时走 `WorkspaceEdit`，别直接改盘**。
+  直接 `fs.writeFileSync` 会和老师未保存的改动打架 —— 缓冲区里那份才是「活」的，
+  磁盘上刚写的会被他下一次保存覆盖回去，症状是「点了没反应，题解里还是老的」。
+  文档没开时仍然直接改盘（省得把它开成脏文档）。
+- **样例的 `.in` 文件：输入为空但输出非空时也要落一个（空）`.in`**。
+  `judge/judge.ts` 的 `discoverSamples` 只按 `^<题号>_(\d+)\.in$` 发现样例，
+  只写 `.out` 的话这种样例**永远不会被评测** —— 洛谷「输出一个数字」那种空输入样例真实存在。
+  反过来 `.out` 缺失的语义是「只运行不判定」，那个要保留。
+- **题号要同时清洗目录名与文件名**（`problems/files.ts` 的 `sanitizeDirName`）。
+  题号来自用户的输入框（校验只挡了空白），`../foo` 这种题号能把目录甚至文件写到题库外面。
+  正常题号（`P1001` / `CF1A` / `AT_abc001_a`）清洗后是恒等变换，不影响既有工作区。
+  另：**板书图宽度这个设置要清洗**（`banshu/template.ts` 的 `banshuImageWidth`）——
+  它是原样拼进 Typst 源码的，一个坏字符就让整份 PDF 编译不过。
 
 ## 登录态的边界
 
@@ -223,6 +260,37 @@ CSRF 只走头、body 里没有 csrf 域，`Origin` 与 `X-Requested-With: XMLHt
 扩展只替换 `// >>> lgAssist:image` / `// >>> lgAssist:code` 标记**之间**的内容，
 标记之外的（老师手写的说明）不会被自动写入碰掉 —— 改这两段逻辑时别把标记语义弄丢。
 
+## 题目封面（联动 BiliBiliHelper）
+
+建题时调隔壁项目 `E:\BiliBiliHelper`（洛谷题解封面生成器，Python）渲染一张封面，落到**题目录**里：
+`<题目录>/<题号> 封面.png`。三层分工：`src/cover/spec.ts`（文件名 + argv，**纯逻辑**）→
+`src/cover/cli.ts`（起进程，同样不 import 'vscode'）→ `src/app/cover.ts`（编排）。两边**不互相 import**，
+只通过对方的 CLI 打交道（`bili-helper cover <题号> -o <图>`）。
+
+改之前先读这四条（前两条是真机踩出来的）：
+
+1. ⚠️ **必须给子进程 `PYTHONIOENCODING=utf-8`**。Windows 上 Python 的 stdout 走管道时按本地代码页
+   （中文系统 cp936）编码，我们按 utf8 读就是乱码 —— `[ok] 已生成封面：…` 变成 `[ok] �����ɷ��棺…`。
+   图其实已经出来了，但日志看着像失败。对方 CLI 只 `reconfigure(errors="replace")`、不动编码，
+   所以只能由调用方指定（见 `cli.ts` 里 `execFile` 的 `env`）。
+2. ⚠️ **`python -m bili_assistant.cli` 需要 cwd 落在 BiliBiliHelper 项目根**，否则
+   `ModuleNotFoundError: No module named 'bili_assistant'`。cwd 来自 `lgAssist.cover.projectDir`；
+   用 venv 里的 `bili-helper.exe` 时不需要它。默认命令是 `bili-helper`（**本机没装在 PATH 上**，
+   所以真机上要按 README「题目封面」那节配 `command`/`args`/`projectDir`）。
+3. **自动流程在界面上完全静默**（`loud=false`），且调用方**不 await**（`void this.host.ensureCoverImage(...)`）。
+   一次渲染约 3–7 秒，建题后老师要的是源文件立刻打开；`ensure()` 内部吞掉所有异常，别把它改成会抛的
+   写法 —— 那是未处理的 rejection。**连「正在生成封面…」的进度通知都不给**：`.vsix` 里装不下
+   BiliBiliHelper，所以**多数学生机器上命令是找不到的**，命令会立刻失败，闪一下的通知比不提示更让人困惑。
+   找不到命令时只往输出面板写日志（完整说明每会话一次，之后一句短行）。只有手动命令
+   （`lgAssist.createCover`）才包 `withProgress` 并弹框 —— 那是用户主动要的。
+   `enabled` 默认 `true`（老师机器开箱即用），学生机无感跳过，别按「学生没装就默认关掉」改。
+4. **已存在就跳过**，重渲染走手动命令。文件名模板（`lgAssist.cover.fileName`，`${id}` 换题号）与
+   封面**设计**模板（`--template series/dark-tech/minimal`）是两回事 —— 曾经合用一个字段，
+   于是换个画面风格会连文件名一起变，「已存在就跳过」当场失效（`test/cover.test.ts` 钉住了这条）。
+
+产物与题解目录里既有的 `<题号> 板书.png` 同一套命名；封面**不**写进 `题解板书.typ`
+（那个图片块是白板导出的板书图，别混）。
+
 模板**只放板书图 + 代码实现两块**，不预置「题意理解/思路/复杂度分析」那些小节
 （板书图里已讲完，正文重复没意义）。但常用组件 `note/tip/warn/chip/divider` 已经
 默认 import 好 —— 否则想临时加个 `#tip[...]` 会先撞一次 `unknown variable`。
@@ -273,6 +341,13 @@ CSRF 只走头、body 里没有 csrf 域，`Origin` 与 `X-Requested-With: XMLHt
   **量内容高前必须先把 `#sheet` 的 `min-height` 摘掉**，否则整页高的 `scrollHeight` 取整后会凭空多出一页。
   导出尺寸默认 150dpi（1240×1754），由 `lgAssist.whiteboard.exportDpi`（72–600）决定。
   **改导出相关代码后请真机看一眼导出图** —— 冒烟测试覆盖不到。
+- ⚠️ **题面里的网络图片必须先内联成 data URI**（`src/whiteboard/remoteImage.ts`）。
+  SVG 当 `<img>` 加载时浏览器**不取外部资源**（KaTeX 字体也是因此才专门内联），
+  不做这步就是「屏幕上有图、导出的 PNG 里是空白」—— 洛谷题面常带示例图，讲义缺图很明显。
+  流程：webview 收集 `#sheet` 里的 `http(s)` 图片 → 扩展进程下载（`inlineRemoteImages`，
+  单张 ≤8MB / 整批 ≤20MB / 最多 20 张 / 魔数嗅探）→ 回传 `url → data URI` →
+  webview 替换 `src` 并去掉 `srcset` → 才序列化。**顺序不能反**（先内联再序列化）。
+  任何一张失败只跳过那一张，不挡导出。
 - **改 `BASE_STYLE` 会顺带改到导出纸张**，字号一变就可能多出一页。所以**纸面可见的排版参数一律在
   `SHEET_RULES` 里显式写死**，别让它继承。改这些参数时注意**方向**：调小只会让页数变少或不变，
   调大才可能凭空多出一页。

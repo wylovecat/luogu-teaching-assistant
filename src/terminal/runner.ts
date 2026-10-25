@@ -239,9 +239,32 @@ export function runInIntegratedTerminal(exe: string, cwd: string, opts: { inputF
   term.sendText(c.keepOpen ? cmd : cmd + exitSuffix(shellPath));
 }
 
-/** 在外部终端里运行可执行文件。 */
-export function runInExternalTerminal(exe: string, cwd: string, options: { inputFile?: string } = {}): void {
-  const launch = buildExternalLaunch(exe, cwd, exe, { inputFile: options.inputFile });
+/**
+ * 外置终端模板里的 `${file}` 指哪个文件。
+ *
+ * 指的是**被运行的源文件**（`.cpp`），不是编译出来的可执行文件。
+ * 拿不到源文件时退回可执行文件 —— 宁可给个能用的值，也不要让模板里留下
+ * 没替换的 `${file}` 占位符（那样命令直接跑不起来）。
+ */
+export function externalTemplateFile(exe: string, sourceFile?: string): string {
+  return sourceFile && sourceFile.trim() !== "" ? sourceFile : exe;
+}
+
+/**
+ * 在外部终端里运行可执行文件。
+ *
+ * `sourceFile` 是**被运行的源文件**（不是编译产物）—— 自定义终端模板里的 `${file}`
+ * 指的就是它。之前这里错把 `exe` 当成 `file` 传下去，于是模板里写 `${file}`
+ * 拿到的是缓存目录里的可执行文件，与文档说的「源文件」对不上。
+ */
+export function runInExternalTerminal(
+  exe: string,
+  cwd: string,
+  options: { inputFile?: string; sourceFile?: string } = {},
+): void {
+  const launch = buildExternalLaunch(exe, cwd, externalTemplateFile(exe, options.sourceFile), {
+    inputFile: options.inputFile,
+  });
   if (launch.shell) {
     spawn(launch.shell, ["-lc", launch.command], { detached: true, stdio: "ignore", cwd }).unref();
     return;
@@ -251,9 +274,18 @@ export function runInExternalTerminal(exe: string, cwd: string, options: { input
   spawn(launch.command, { shell: true, stdio: "ignore", cwd, windowsHide: true }).unref();
 }
 
-/** 一键运行：按配置分发到集成/外置终端。 */
-export function runProgram(exe: string, cwd: string, opts: { inputFile?: string; title?: string } = {}): void {
+/**
+ * 一键运行：按配置分发到集成/外置终端。
+ *
+ * `sourceFile` 传被运行的源文件路径，外置终端模板里的 `${file}` 用它。
+ */
+export function runProgram(
+  exe: string,
+  cwd: string,
+  opts: { inputFile?: string; title?: string; sourceFile?: string } = {},
+): void {
   const c = terminalConfig();
-  if (c.mode === "external") runInExternalTerminal(exe, cwd, { inputFile: opts.inputFile });
-  else runInIntegratedTerminal(exe, cwd, opts);
+  if (c.mode === "external") {
+    runInExternalTerminal(exe, cwd, { inputFile: opts.inputFile, sourceFile: opts.sourceFile });
+  } else runInIntegratedTerminal(exe, cwd, opts);
 }

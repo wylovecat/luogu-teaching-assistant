@@ -4,15 +4,18 @@ import {
   formatBytes,
   indentationFix,
   isFinalJudgeResult,
+  judgeSignature,
   looksLikeProblemId,
   maskAccount,
   needsPreSubmitCompile,
   normVerdict,
   normalizeOutput,
   outputsEqual,
+  sameFilePath,
   shortHash,
   stemOf,
   verdictLabel,
+  verdictNeedsConfirm,
 } from "../src/util";
 
 test("normalizeOutput 去掉行尾空白与末尾空行", () => {
@@ -139,4 +142,49 @@ test("indentationFix 只在探测结果与用户配置不一致时纠正新建�
   // 配置成 "auto"（按内容探测）时不要插手
   assert.equal(indentationFix({ tabSize: 4, insertSpaces: true }, { tabSize: "auto", insertSpaces: true }), null);
   assert.equal(indentationFix({ tabSize: 4, insertSpaces: true }, { tabSize: 4 }), null);
+});
+
+test("sameFilePath 认同一个文件的多种写法（Windows 不区分大小写）", () => {
+  // 完全相同
+  assert.equal(sameFilePath("C:\\work\\P1001.cpp", "C:\\work\\P1001.cpp", "win32"), true);
+  // Windows 上大小写不敏感
+  assert.equal(sameFilePath("C:\\work\\P1001.cpp", "c:\\work\\p1001.cpp", "win32"), true);
+  // 结尾多一个分隔符
+  assert.equal(sameFilePath("C:\\work\\P1001.cpp", "C:\\work\\P1001.cpp\\", "win32"), true);
+  // `..` 与相对段先 resolve 掉
+  assert.equal(sameFilePath("C:\\work\\sub\\..\\P1001.cpp", "C:\\work\\P1001.cpp", "win32"), true);
+  // 不同文件
+  assert.equal(sameFilePath("C:\\work\\P1001.cpp", "C:\\work\\P1002.cpp", "win32"), false);
+  // Linux 上大小写敏感
+  assert.equal(sameFilePath("/work/P1001.cpp", "/work/p1001.cpp", "linux"), false);
+  assert.equal(sameFilePath("/work/P1001.cpp", "/work/P1001.cpp", "linux"), true);
+  // 空串不算同一个文件（别把「不知道」当成「是」）
+  assert.equal(sameFilePath("", "/work/P1001.cpp", "linux"), false);
+  assert.equal(sameFilePath("/work/P1001.cpp", "", "linux"), false);
+});
+
+test("verdictNeedsConfirm：AC/CE 直接认，其余终局判定要再确认一拍", () => {
+  // 稳定的判定：编译失败就是编译失败，跑过了就是跑过了
+  assert.equal(verdictNeedsConfirm("AC"), false);
+  assert.equal(verdictNeedsConfirm("CE"), false);
+  // 可能是站点写回中途的中间态：WA 先落、TLE 后盖
+  assert.equal(verdictNeedsConfirm("WA"), true);
+  assert.equal(verdictNeedsConfirm("TLE"), true);
+  assert.equal(verdictNeedsConfirm("MLE"), true);
+  assert.equal(verdictNeedsConfirm("RE"), true);
+  // "?" 本来就不是判定，确认它也确认不出什么
+  assert.equal(verdictNeedsConfirm("?"), false);
+});
+
+test("judgeSignature：判定相同才算同一个判定（分数与耗时不算）", () => {
+  // 分数会随着测试点跑完而变，算进来就永远对不上
+  assert.equal(
+    judgeSignature({ verdict: "WA", rawStatus: "WA", score: 10, timeMs: 100 }),
+    judgeSignature({ verdict: "WA", rawStatus: "WA", score: 60, timeMs: 300 }),
+  );
+  // 判定变了 → 身份串不同
+  assert.notEqual(
+    judgeSignature({ verdict: "WA", rawStatus: "WA" }),
+    judgeSignature({ verdict: "TLE", rawStatus: "TLE" }),
+  );
 });

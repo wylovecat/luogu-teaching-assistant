@@ -19,6 +19,8 @@
 | 题面面板 | 内置面板渲染题面（KaTeX 公式），可复制样例、另存 Markdown | 否 |
 | 题面白板 | 在题面上用数位笔批注，导出 A4 PNG | 否 |
 | 知识面板 | 空白 A4 纸，用来讲知识点，导出 A4 PNG | 否 |
+| 题解板书 | 建题时铺好 Typst 题解文档，板书图 + AC 代码自动整理，一键导出 PDF | 否 |
+| 题目封面 | 建题时调 `BiliBiliHelper` 生成封面，落在题目录里（见 [题目封面](#题目封面联动-bilibilihelper)） | 否 |
 | 代码导出 PNG | 把当前文件渲染成带语法高亮的图片 | 否 |
 | 提交洛谷 | 提交当前文件到洛谷并轮询评测结果 | 是 |
 
@@ -37,8 +39,60 @@ code --install-extension luogu-teaching-assistant-<version>.vsix
 装完请 **Reload Window**。验证装的是不是这份代码：比对 `dist/extension.js` 与
 `%USERPROFILE%\.vscode\extensions\lgassist.luogu-teaching-assistant-<version>\dist\extension.js` 的字节数。
 
-## 登录（洛谷）
+## 题目封面（联动 BiliBiliHelper）
 
+建题时扩展会自动调 **BiliBiliHelper**（洛谷题解封面生成器）渲染一张封面，落到这道题的题解目录里：
+
+```
+题库/P1001 A+B Problem/
+  P1001.cpp
+  P1001.md
+  P1001 封面.png          ← 自动生成（题号、题名、难度、标签、署名都由 BiliBiliHelper 拉/排版）
+  题解板书.typ
+```
+
+- **已存在就跳过**，所以重复建题不会重渲染。想换一张：命令面板运行「生成题目封面（BiliBiliHelper）」。
+- **失败不影响建题，界面也不打扰**：它在后台跑（一次约 3–7 秒），出错只写进「洛谷教学助手」输出面板 ——
+  不弹框、不给进度通知。
+- 生成用的是 BiliBiliHelper 自己 `config.toml` 里的系列名/模板/配色 —— 也就是说，
+  **在封面工作台里怎么配，这里就怎么出图**；本扩展只覆盖它没写死的那几项。
+
+> **没装 BiliBiliHelper 的机器（比如发给学生的 vsix）**：这个功能会**静默跳过** ——
+> 界面上什么都不弹，只在输出面板留一行「未找到封面生成命令」。建题、编译、评测、白板全都不受影响，
+> 所以**发给学生的那份 vsix 不需要为它做任何事**。想让日志也消失，把 `lgAssist.cover.enabled`
+> 设成 `false` 即可。
+
+### 配置
+
+封面命令默认找 PATH 上的 `bili-helper`。两种常见装法二选一：
+
+**A. 有 console script（`pip install -e .` 到 venv，直接用它的 exe）**
+
+```jsonc
+{
+  "lgAssist.cover.command": "C:\\path\\to\\BiliBiliHelper\\.venv\\Scripts\\bili-helper.exe"
+}
+```
+
+**B. 用 Python 跑源码（没装 console script，或想固定用某个解释器）**
+
+```jsonc
+{
+  "lgAssist.cover.command": "python",
+  "lgAssist.cover.args": ["-m", "bili_assistant.cli"],
+  "lgAssist.cover.projectDir": "C:\\path\\to\\BiliBiliHelper"   // 必须是项目根，否则 import 不到包
+}
+```
+
+其余可选项（都留空 = 用 BiliBiliHelper 的默认）：`lgAssist.cover.template`（series / dark-tech / minimal）、
+`lgAssist.cover.palette`（blue / purple / warm / dark）、`lgAssist.cover.size`（如 `1146x717`）、
+`lgAssist.cover.fileName`（默认 `${id} 封面.png`）、`lgAssist.cover.extraArgs`（如 `["--ai-bg"]`，
+AI 背景**按次计费**，且它自己会走缓存）、`lgAssist.cover.timeoutMs`。
+不需要这个功能就把 `lgAssist.cover.enabled` 关掉。
+
+> 前置条件只在 BiliBiliHelper 那一侧：装好它、并且 `python -m playwright install chromium` 跑过一次。
+
+## 登录（洛谷）
 洛谷登录带验证码，扩展里做不了自动登录，所以走**粘贴 Cookie**：
 
 1. 点侧边栏的「登录洛谷账号」（或状态栏的账号项）；
@@ -69,9 +123,10 @@ npm run verify      # 上面三步串起来，本地交付前跑这个
 ```
 src/
   luogu/          站点层（唯一访问 www.luogu.com.cn 的地方）
-  app/            命令编排：judge / problems / board / submit / imageExport / banshu
+  app/            命令编排：judge / problems / board / submit / imageExport / banshu / cover
   problems/       题面字段映射、文件关联、建题落盘
   banshu/         题解板书：Typst 版式与文档模板、typst 编译调用
+  cover/          题目封面：文件名/命令行拼装（纯逻辑）、调 BiliBiliHelper 的 CLI
   whiteboard/     白板模型 + webview（手写笔批注、A4 导出）
   judge/          本地编译与样例评测
   terminal/       编译/运行的终端命令拼装

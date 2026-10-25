@@ -27,6 +27,20 @@ export interface HttpResponse {
 
 const DEFAULT_TIMEOUT = 20000;
 
+/**
+ * 连接复用（keep-alive）。
+ *
+ * 不显式传 agent 就用 globalAgent，而 globalAgent 的 `keepAlive` 是 **Node 19 才默认打开**的；
+ * 本扩展的目标运行时是 Node 18（VS Code 自带的 Electron），于是每个请求都要重做一遍
+ * DNS + TCP + TLS 握手。轮询评测结果每 2 秒一次、一次提交能轮询到 30 次 —— 就是 30 次握手。
+ *
+ * `maxSockets` 刻意不止给 1：站点请求虽然串行节流，但登录探活（`probe`）与排队中的请求
+ * 可能正好撞上，只给一个 socket 会让它们排队互等。空闲连接由 Node 自己按
+ * `keepAliveTimeout` 回收，这里不用另管。
+ */
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 5 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 5 });
+
 /** 极简 HTTP 客户端：只用 node:http(s)，不依赖 fetch 是否可用。 */
 export function request(req: HttpRequest): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
@@ -56,6 +70,7 @@ export function request(req: HttpRequest): Promise<HttpResponse> {
         port: url.port || (isHttps ? 443 : 80),
         path: url.pathname + url.search,
         method: req.method,
+        agent: isHttps ? httpsAgent : httpAgent,
         headers,
       },
       (res) => {

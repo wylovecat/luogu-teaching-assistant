@@ -12,6 +12,7 @@
  * | `submit` | 提交到洛谷、轮询评测结果 |
  * | `imageExport` | 代码导出 PNG |
  * | `banshu` | 题解板书：生成 Typst 文档、插板书图与 AC 代码、导出 PDF |
+ * | `cover` | 封面：建题时调 BiliBiliHelper 渲染封面到题目录 |
  *
  * App 同时充当控制器的 `PeerHost`：控制器之间不直接互相 import，跨域调用都回到这里
  * （见 base.ts）。新增一个域就是加一个控制器 + 在这里挂一个方法。
@@ -24,6 +25,7 @@ import { type PeerHost, refreshCurrentRef } from "./base";
 import { type AppDeps } from "./deps";
 import { BanshuController } from "./banshu";
 import { BoardController } from "./board";
+import { CoverController } from "./cover";
 import { ImageExportController } from "./imageExport";
 import { JudgeController } from "./judge";
 import { ProblemsController } from "./problems";
@@ -37,6 +39,7 @@ export class App implements PeerHost {
   private readonly submitCtl: SubmitController;
   private readonly imagesCtl: ImageExportController;
   private readonly banshuCtl: BanshuController;
+  private readonly coverCtl: CoverController;
 
   constructor(private readonly deps: AppDeps) {
     // 控制器的构造只存引用、不会回调 host，所以传 this 是安全的
@@ -46,6 +49,7 @@ export class App implements PeerHost {
     this.submitCtl = new SubmitController(deps, this);
     this.imagesCtl = new ImageExportController(deps, this);
     this.banshuCtl = new BanshuController(deps, this);
+    this.coverCtl = new CoverController(deps, this);
   }
 
   // ── 登录 ──────────────────────────────────────────────────────
@@ -134,6 +138,13 @@ export class App implements PeerHost {
     return this.banshuCtl.writeSharedConf();
   }
 
+  // ── 封面（联动 BiliBiliHelper） ───────────────────────────────
+
+  /** 为当前题目生成/重新生成封面。 */
+  createCover(): Promise<void> {
+    return this.coverCtl.generateForCurrent();
+  }
+
   // ── 其他 ──────────────────────────────────────────────────────
 
   async clearRecents(): Promise<void> {
@@ -179,5 +190,11 @@ export class App implements PeerHost {
 
   insertBanshuImages(displayId: string, files: string[]): Promise<void> {
     return this.banshuCtl.insertBoardImages(displayId, files);
+  }
+
+  // ── PeerHost：封面域（建题后） ────────────────────────────────
+
+  ensureCoverImage(displayId: string, dir: string): Promise<void> {
+    return this.coverCtl.ensure(displayId, dir);
   }
 }

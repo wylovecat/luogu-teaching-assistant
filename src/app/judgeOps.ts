@@ -45,5 +45,5 @@ export async function compileAndRunFile(file: string): Promise<void> {
     return;
   }
   publishCompileResult(file, res);
-  runProgram(res.exe, path.dirname(file), { title: `运行 ${path.basename(file)}` });
+  runProgram(res.exe, path.dirname(file), { title: `运行 ${path.basename(file)}`, sourceFile: file });
 }

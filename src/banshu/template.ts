@@ -48,18 +48,44 @@ export function markEnd(key: string): string {
 }
 
 /**
- * 替换标记块的内容。块不存在时**原样返回**（不猜位置乱插）——
+ * 标记块在文档里的位置（**只含块内容**，不含两头的标记）。
+ *
+ * 单独抽出来是为了让编辑器侧能做**最小编辑**：只替换标记之间的那几个字，
+ * 文档其余部分（老师手写的说明、别的块、格式）一个字节都不动。
+ */
+export interface BlockSpan {
+  /** 块内容的起始偏移（紧跟在开始标记之后） */
+  from: number;
+  /** 块内容的结束偏移（结束标记的起始位置） */
+  to: number;
+}
+
+/**
+ * 找出标记块的范围。块不存在时**抛错**（不猜位置乱插）——
  * 用户可能把整段删了，那时报错让人知道，比偷偷插到文件末尾强。
  */
-export function replaceBlock(content: string, key: string, body: string): string {
+export function blockSpan(content: string, key: string): BlockSpan {
   const start = markStart(key);
   const end = markEnd(key);
   const from = content.indexOf(start);
   if (from < 0) throw new Error(`题解文档里找不到标记块「${key}」（${start}），无法写入`);
   const to = content.indexOf(end, from + start.length);
   if (to < 0) throw new Error(`题解文档里的标记块「${key}」没有结束标记（${end}）`);
-  const inner = body.trim() === "" ? "" : `\n${body.trim()}\n`;
-  return content.slice(0, from + start.length) + inner + content.slice(to);
+  return { from: from + start.length, to };
+}
+
+/** 写进标记块里的内容：空块不留空行。 */
+export function blockBody(body: string): string {
+  return body.trim() === "" ? "" : `\n${body.trim()}\n`;
+}
+
+/**
+ * 替换标记块的内容。块不存在时**抛错**（不猜位置乱插）——
+ * 用户可能把整段删了，那时报错让人知道，比偷偷插到文件末尾强。
+ */
+export function replaceBlock(content: string, key: string, body: string): string {
+  const { from, to } = blockSpan(content, key);
+  return content.slice(0, from) + blockBody(body) + content.slice(to);
 }
 
 /** 读出标记块的内容（没找到就给空串，便于调用方判断「还没插过图/代码」）。 */
@@ -95,6 +121,9 @@ export function banshuTitle(displayId: string, title: string): string {
  * 不预置「题意理解 / 思路 / 复杂度分析」那些小节：板书图里已经讲完了，正文再摆一遍是重复，
  * 而且现场（比如录课）也不需要再去填。
  *
+ * 板书图前面固定给一个 `= 题解板书` 一级标题：PDF 里图不再是个光秃秃的开头，
+ * 而且一级标题带底色带与左边线，翻页/找段落时有个明确的锚点（老师的反馈）。
+ *
  * 需要额外说明时直接在标记块外面写 —— 扩展只替换 `lgAssist:*` 标记之间的部分。
  * 共享版式里的常用组件（`note` / `tip` / `warn` / `chip` / `divider` / `c-fill`）
  * **已经默认 import 好了**，想用直接写 `#tip[……]` 就行，不用再改 import
@@ -121,6 +150,8 @@ export function buildBanshuDoc(opts: BanshuDocOptions): string {
   type: "题解板书",
   doc,
 )
+
+= 题解板书
 
 ${markStart("image")}
 ${markEnd("image")}
@@ -164,6 +195,31 @@ export function imageBlockBody(displayId: string, pages: number, width = "89%"):
  */
 export function countImages(blockBody: string): number {
   return (blockBody.match(/#image\(/g) ?? []).length;
+}
+
+/** 板书图的默认宽度（与 `lgAssist.banshu.imageWidth` 的默认值一致）。 */
+export const DEFAULT_BANSHU_IMAGE_WIDTH = "89%";
+
+/**
+ * Typst 长度表达式：数字 + 单位（`%` / `pt` / `mm` / `cm` / `in` / `em` / `ex` / `ch` / `fr`）。
+ * 单独一个 `auto` 也认（自适应）。
+ */
+const TYPST_LENGTH_RE = /^(?:\d+(?:\.\d+)?)(?:%|pt|mm|cm|in|em|ex|ch|fr)$/i;
+
+/**
+ * 板书图在题解里的宽度。
+ *
+ * 这个值是**原样拼进 Typst 源码**的（`#image("…", width: <这里>)`），所以必须先校验：
+ * 一个坏字符就让**整份 PDF 编译不过**（`width: 89 %` 是语法错误，`width: abc` 更糟），
+ * 而题解编译失败时人只会看到一句「编译出错」，很难联想到是宽度设置写歪了。
+ *
+ * 认得的写法照用（`89%`、`10cm`、`auto`…），认不出的回落默认值。
+ */
+export function banshuImageWidth(text: string | undefined | null): string {
+  const t = (text ?? "").trim();
+  if (t === "auto") return "auto";
+  if (TYPST_LENGTH_RE.test(t)) return t;
+  return DEFAULT_BANSHU_IMAGE_WIDTH;
 }
 
 /**

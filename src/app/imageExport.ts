@@ -4,7 +4,6 @@
  * 导出目录与两块白板共用同一份记忆（`LAST_EXPORT_DIR_KEY`）。
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { exportCodeImage } from "../imgexport/exportImage";
@@ -19,7 +18,9 @@ export class ImageExportController extends Controller {
       return;
     }
     try {
-      const code = fs.readFileSync(file, "utf8");
+      // 走 readSource：编辑器里改了没存盘时先存盘 —— 导出的 PNG 必须是**屏幕上这份**代码，
+      // 直接读盘会导出上一版，投影出去就是错代码。
+      const code = await this.readSource(file);
       await exportCodeImage(code, path.basename(file), {
         lastDir: this.context.globalState.get<string>(LAST_EXPORT_DIR_KEY),
         onSaved: async (saved) => {

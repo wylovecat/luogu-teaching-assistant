@@ -23,7 +23,8 @@ import { firstDiagnosticText, summarizeDiagnostics } from "../judge/diagnostics"
 import { publishCompileResult } from "../judge/problems";
 import type { JudgeReport } from "../judge/judge";
 import type { ProblemRef } from "../problems/link";
-import { isFinalJudgeResult, needsPreSubmitCompile, shortHash, stemOf, verdictLabel } from "../util";
+import { isFinalJudgeResult, judgeSignature, needsPreSubmitCompile, shortHash, stemOf, verdictLabel, verdictNeedsConfirm } from "../util";
+import { JudgePanel } from "../ui/judgePanel";
 import { Controller } from "./base";
 
 /**
@@ -33,6 +34,13 @@ import { Controller } from "./base";
  * 「还没评测」的那条记录。配合 `isFinalJudgeResult` 双重把关。
  */
 const POLL_SETTLE_MS = 1500;
+
+/** 提交结果卡片右上角的时间戳（`HH:MM:SS`，本地时区）。 */
+function clockNow(): string {
+  const d = new Date();
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
 
 export class SubmitController extends Controller {
   /** 提交进行中（评测面板与快捷键都可能触发），防止并发提交同一份代码 */
@@ -69,6 +77,26 @@ export class SubmitController extends Controller {
       void vscode.window.showWarningMessage("上一次提交还在进行中，请稍候");
       return;
     }
+    /*
+     * 锁在这里就上 —— 原来「检查在前、置位在真正发请求前」，两者中间隔着 readSource /
+     * resolveRef / 提交前编译三个 await，连点两次提交两次都能通过检查，
+     * 站点上就多出一条重复记录。
+     *
+     * 洛谷的 POST 明确**绝不能自动重试**（重复提交比一次失败更难收拾：站点上两条记录，
+     * 老师自己也说不清哪条是自己刚交的那份），所以这道闸必须卡在入口。
+     */
+    this.submitting = true;
+    try {
+      await this.runSubmit(file, compiledHash);
+    } finally {
+      this.submitting = false;
+    }
+  }
+
+  /**
+   * 真正提交的那几步。调用方（`submitFile`）已经持锁，这里只管做事。
+   */
+  private async runSubmit(file: string, compiledHash?: string): Promise<void> {
     const code = await this.readSource(file);
     if (!code.trim()) {
       void vscode.window.showWarningMessage("文件内容为空，未提交");
@@ -105,7 +133,6 @@ export class SubmitController extends Controller {
 
     const target = `洛谷 ${ref.displayId}`;
     let rid = 0;
-    this.submitting = true;
     try {
       const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: `正在提交到 ${target}…`, cancellable: true },
@@ -136,19 +163,60 @@ export class SubmitController extends Controller {
 
       // 拿到 AC 就把这份代码快照进题解（快照而非引用源文件：
       // 之后继续改代码做变体，题解里留的仍是「当时 AC 的那份」）。
-      // 写完后才弹通知 —— 这样「查看评测记录」按钮出来时题解已经更新好了。
       if (result.verdict === "AC") {
         await this.host.writeBanshuCode(ref.displayId, code);
       }
 
-      const action = await vscode.window.showInformationMessage(`${target}：${summary}`, "查看评测记录");
-      if (action === "查看评测记录") {
-        await vscode.env.openExternal(vscode.Uri.parse(`https://www.luogu.com.cn/record/${rid}`));
-      }
+      // 结果推给「样例评测结果」面板 —— 通知只弹一下，一眼看不全分数/耗时/内存，
+      // 也没法回看。面板开着就地刷新（不重开、不重新评测），老师可以在那儿看完整结论。
+      JudgePanel.publishSubmit({
+        sourcePath: file,
+        ok: true,
+        rid,
+        verdict: result.verdict,
+        summary,
+        feedback: result.feedback.trim(),
+        score: result.score,
+        timeMs: result.timeMs,
+        memoryMb: result.memoryBytes === null ? null : result.memoryBytes / 1024 / 1024,
+        error: "",
+        at: clockNow(),
+      });
+
+      /*
+       * ⚠️ 通知**不能 await 完再返回**。
+       *
+       * `showInformationMessage` 会一直挂到用户点掉/点了按钮为止 —— 通知就那么浮在那里，
+       * 没人理它。原先这里 `await` 了它，于是整个提交函数卡在最后一行不返回，
+       * 面板那头等不到 `submitDone`，按钮永远停在「提交中…」（2026-10-13 老师反馈）。
+       *
+       * 所以：通知发出去就不管了（结果已经进了面板与输出面板，不会丢），
+       * 按钮的复位由 submitFile 返回后立刻触发。真要跳记录页，面板卡片上有按钮。
+       */
+      void vscode.window
+        .showInformationMessage(`${target}：${summary}`, "查看评测记录")
+        .then((action) => {
+          if (action === "查看评测记录") {
+            return vscode.env.openExternal(vscode.Uri.parse(`https://www.luogu.com.cn/record/${rid}`));
+          }
+          return undefined;
+        });
     } catch (e) {
+      // 失败也要落在面板上：通知一闪而过，而「为什么没提交上去」正是要看清的东西
+      JudgePanel.publishSubmit({
+        sourcePath: file,
+        ok: false,
+        rid: 0,
+        verdict: "",
+        summary: "",
+        feedback: "",
+        score: null,
+        timeMs: null,
+        memoryMb: null,
+        error: this.messageOf(e),
+        at: clockNow(),
+      });
       this.reportError("提交失败", e);
-    } finally {
-      this.submitting = false;
     }
   }
 
@@ -158,10 +226,23 @@ export class SubmitController extends Controller {
     token: vscode.CancellationToken,
   ): Promise<LuoguResult | null> {
     const { pollIntervalMs, pollTimeoutMs } = submitConfig();
-    const deadline = Date.now() + pollTimeoutMs;
+    const startedAt = Date.now();
+    const deadline = startedAt + pollTimeoutMs;
+    /**
+     * 非 AC 判定至少留观这么久才认（三个轮询间隔）。
+     *
+     * 站点异步写回判定时，顶层状态可能先落一个「看起来像结论」的值（典型是 WA），
+     * 稍后才被真正的判定（TLE）盖掉。只凭「拿到一个终局码」就报出去，
+     * 症状就是**实际 TLE 却报成 WA** —— 老师照着 WA 去改代码，改到天亮也过不了。
+     *
+     * 用轮询间隔的倍数而不是写死毫秒：把间隔调小就能覆盖这条路径，测试也跑得动。
+     */
+    const settleMs = pollIntervalMs * 3;
     let waited = 0;
     /** 最后一次拿到的结果：超时兜底时用它，比只报「超时」有用 */
     let last: LuoguResult | null = null;
+    /** 上一次看到的终局判定身份串：连续两次一致才认（留观期内只记候选） */
+    let candidate: string | null = null;
 
     // 先等一拍再查：刚提交时记录里还没有判定
     progress.report({ message: "已提交，等待评测…" });
@@ -174,18 +255,51 @@ export class SubmitController extends Controller {
       }
       const res = await this.session.client.poll(rid);
       last = res;
-      if (isFinalJudgeResult(res)) return res;
-      if (res.done) {
-        // 站点说「结束了」，但记录里还没有判定文本 —— 这是还没写回的中间态，
-        // 直接报出去就是错判。继续等下一轮。
-        output.appendLine(`[评测] 记录还没有最终判定（verdict=${res.rawStatus || "(空)"}），继续等待…`);
-      } else if (waited === 0) {
-        // 第一轮就没读到判定：把「读到什么」说明白。
-        // 判定在 `record.status`（数字）；这一行是定位它的线索（配合上一条「诊断」）。
-        output.appendLine(
-          `[评测] 记录还没有终局判定（读到 status=${res.rawStatus || "(空)"}）——` +
-            "若 status 不是已知的数字码，请看上一条「诊断」里的字段名。",
-        );
+      /*
+       * 每一拍留一行现场：站点字段再变时，从输出面板就能看出「当时给的是什么」，
+       * 不用再去猜。判定在 `record.status`（数字），这一行同时把 status 打出来。
+       */
+      output.appendLine(
+        `[评测] rid=${res.id} status=${res.rawStatus || "(空)"} 判定=${res.verdict}` +
+          (res.timeMs !== null ? ` ${res.timeMs}ms` : "") +
+          (res.score !== null ? ` ${res.score}分` : ""),
+      );
+
+      if (isFinalJudgeResult(res)) {
+        const key = judgeSignature(res);
+        if (!verdictNeedsConfirm(res.verdict)) {
+          // AC / CE：不会再变，直接报。
+          output.appendLine(`[评测] 判定已确认：${res.verdict}`);
+          return res;
+        }
+        if (Date.now() - startedAt < settleMs) {
+          // 留观期内：只记候选，**不报**。
+          candidate = key;
+          output.appendLine(`[评测] 拿到判定 ${res.verdict}，先留观（等评测写稳）…`);
+        } else if (candidate === key) {
+          // 留观期过了，且与上一拍**同一个判定** → 认。
+          output.appendLine(`[评测] 判定已确认：${res.verdict}`);
+          return res;
+        } else {
+          // 判定变了（或者这是留观期后的第一拍）：再等一拍。
+          candidate = key;
+          output.appendLine(`[评测] 判定与上一拍不一致（${res.verdict}），再等一拍确认…`);
+        }
+      } else {
+        // 中间态：候选作废（判定可能会变）。
+        candidate = null;
+        if (res.done) {
+          // 站点说「结束了」，但记录里还没有判定文本 —— 这是还没写回的中间态，
+          // 直接报出去就是错判。继续等下一轮。
+          output.appendLine(`[评测] 记录还没有最终判定（status=${res.rawStatus || "(空)"}），继续等待…`);
+        } else if (waited === 0) {
+          // 第一轮就没读到判定：把「读到什么」说明白。
+          // 判定在 `record.status`（数字）；这一行是定位它的线索（配合上一条「诊断」）。
+          output.appendLine(
+            `[评测] 记录还没有终局判定（读到 status=${res.rawStatus || "(空)"}）——` +
+              "若 status 不是已知的数字码，请看上一条「诊断」里的字段名。",
+          );
+        }
       }
       waited += pollIntervalMs;
       progress.report({ message: `评测中… 已等待 ${Math.round(waited / 1000)} 秒` });
@@ -194,7 +308,7 @@ export class SubmitController extends Controller {
     // 超时收场：只有最后一次真的是「可交付的结果」才报出去。
     // 已知不准的那份（记录里还没有判定）宁可不报。
     if (last && isFinalJudgeResult(last)) {
-      output.appendLine(`[评测] 轮询超时，返回最后一次结果（verdict=${last.rawStatus}）`);
+      output.appendLine(`[评测] 轮询超时，返回最后一次结果（status=${last.rawStatus}）`);
       return last;
     }
     if (last) {

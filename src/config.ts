@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { DEFAULT_COVER_FILE } from "./cover/spec";
 import { DEFAULT_ENABLE_O2 } from "./luogu/contract";
 import { DEFAULT_EXPORT_DPI, clampExportDpi } from "./whiteboard/model";
 
@@ -130,10 +131,47 @@ export function banshuConfig(): BanshuConfig {
   return {
     enabled: c.get<boolean>("banshu.enabled", true),
     confDir: c.get<string>("banshu.confDir", ""),
-    author: c.get<string>("banshu.author", ""),
+    author: c.get<string>("banshu.author", "爱学习的咸鱼君"),
     course: c.get<string>("banshu.course", "《深入浅出程序设计竞赛》题解"),
     typstPath: c.get<string>("banshu.typstPath", "typst"),
     imageWidth: c.get<string>("banshu.imageWidth", "89%"),
+  };
+}
+
+export interface CoverConfig {
+  /** 建题时是否自动调 BiliBiliHelper 生成封面（落到题目录）。关掉后只剩手动命令。 */
+  enabled: boolean;
+  /** bili-helper 可执行文件；也可以用 `args` + `projectDir` 走 `python -m bili_assistant.cli`。 */
+  command: string;
+  /** 命令前缀参数（如 `["-m", "bili_assistant.cli"]`）。 */
+  args: string[];
+  /** 进程工作目录；走 `python -m` 时必须是 BiliBiliHelper 项目根（否则 import 不到包）。 */
+  projectDir: string;
+  /** 模板/配色/尺寸：留空 = 用 BiliBiliHelper 自己 config.toml 里的默认。 */
+  template: string;
+  palette: string;
+  size: string;
+  /** 追加到命令行末尾的原始参数，如 `["--ai-bg"]`（AI 背景**按次计费**）。 */
+  extraArgs: string[];
+  /** 封面文件名模板，`${id}` 换成题号。 */
+  fileName: string;
+  timeoutMs: number;
+}
+
+export function coverConfig(): CoverConfig {
+  const c = cfg();
+  return {
+    enabled: c.get<boolean>("cover.enabled", true),
+    command: c.get<string>("cover.command", "bili-helper"),
+    args: c.get<string[]>("cover.args", []),
+    projectDir: c.get<string>("cover.projectDir", ""),
+    template: c.get<string>("cover.template", ""),
+    palette: c.get<string>("cover.palette", ""),
+    size: c.get<string>("cover.size", ""),
+    extraArgs: c.get<string[]>("cover.extraArgs", []),
+    fileName: c.get<string>("cover.fileName", DEFAULT_COVER_FILE),
+    // 一张封面要起一次 Playwright，首次或冷启动能到十几秒；下限给 5 秒，免得填个 0 就必超时。
+    timeoutMs: Math.max(5000, c.get<number>("cover.timeoutMs", 120000)),
   };
 }
 

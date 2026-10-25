@@ -129,6 +129,12 @@ body { padding: 0; margin: 0; height: 100vh; display: flex; flex-direction: colu
   touch-action: none; cursor: crosshair; background: var(--vscode-editor-background);
 }
 /*
+ * 视口带 tabindex（要能接键盘焦点，见 webview.ts 的 claimKeyboardFocus），
+ * 但它是整块画布不是表单控件 —— 聚焦时不要画那一圈默认高亮边框，
+ * 在投影上非常显眼，而且它并不表示「有什么可操作的东西被选中了」。
+ */
+#viewport:focus, #viewport:focus-visible { outline: none; }
+/*
  * 白板是「纸」，不是网页：纸面上的题面虽然是 DOM，但不该被选中、拖拽或点击。
  *
  * 为什么必须显式关掉（2026-10-11 用户报「笔走一小段就断、得抬笔重落，题面区域高发」）：
@@ -252,7 +258,7 @@ export function buildWhiteboardHtml(opts: WhiteboardHtmlOptions): string {
   <span id="wb-pages" class="wb-readout"></span>
   <span id="wb-status" class="wb-readout"></span>
 </div>
-<div id="viewport">
+<div id="viewport" tabindex="0">
   <div id="world"><div id="marks-out"></div><div id="sheet" class="oi-sheet"><div class="oi-sheet-body">${opts.statementHtml}</div></div><div id="marks"></div></div>
   <canvas id="ink"></canvas>
 </div>

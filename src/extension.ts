@@ -50,6 +50,7 @@ export function activate(context: vscode.ExtensionContext): void {
   register("lgAssist.insertBanshuCode", () => app.insertBanshuCode());
   register("lgAssist.exportBanshuPdf", () => app.exportBanshuPdf());
   register("lgAssist.writeBanshuConf", () => app.writeBanshuConf());
+  register("lgAssist.createCover", () => app.createCover());
   register("lgAssist.refresh", async () => {
     await app.refreshCurrentRef();
     sidebar.refresh();

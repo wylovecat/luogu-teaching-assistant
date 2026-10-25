@@ -30,6 +30,8 @@ export interface PeerHost {
   writeBanshuCode(displayId: string, code: string): Promise<void>;
   /** 题解域：白板导出到题目录后，把这几页图写进题解。 */
   insertBanshuImages(displayId: string, files: string[]): Promise<void>;
+  /** 封面域：建题后生成题目封面（幂等，已存在不动；失败只记日志）。 */
+  ensureCoverImage(displayId: string, dir: string): Promise<void>;
 }
 
 /**

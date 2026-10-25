@@ -59,6 +59,8 @@ interface ExtMessage {
   command?: string;
   css?: string;
   ok?: boolean;
+  /** inlineImages 的响应：原 url → data URI */
+  images?: Record<string, string>;
 }
 
 const vscode = acquireVsCodeApi();
@@ -155,6 +157,8 @@ let exportH = EXPORT_HEIGHT;
 let exportCss: string | null = null;
 let exportCssOk = true;
 let pendingCss: ((v: { css: string; ok: boolean }) => void) | null = null;
+/** inlineImages 的回包（url → data URI）挂在这个回调上 */
+let pendingImages: ((map: Record<string, string>) => void) | null = null;
 
 function must<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
@@ -702,8 +706,37 @@ function notePointerKind(e: PointerEvent): void {
   viewport.classList.toggle("wb-pen-cursor", pointerKind !== "mouse");
 }
 
+/**
+ * 把键盘焦点抢到白板这边来。
+ *
+ * 分屏（左白板 / 右代码）时焦点是**全局唯一**的：在代码区点一下，之后所有按键都进编辑器。
+ * 手写笔的 pointerdown 不会像鼠标那样顺带把焦点带回 webview，所以要显式 `focus()`。
+ *
+ * `preventScroll` 很关键：不带它的话，聚焦时浏览器会试图把「当前焦点元素」滚进视口，
+ * 白板画布一旦被判定需要滚动就会整体跳一下（写字的人会看到纸突然位移）。
+ * 取不到 viewport（理论上不会，start() 里已经 must 过）时静默跳过，别让按键这条路炸掉。
+ */
+function claimKeyboardFocus(): void {
+  try {
+    if (viewport && document.activeElement !== viewport) viewport.focus({ preventScroll: true });
+  } catch {
+    /* 聚焦失败不影响画字，忽略 */
+  }
+}
+
 function onPointerDown(e: PointerEvent): void {
   notePointerKind(e);
+  /*
+   * 落笔就把键盘焦点抢回来。
+   *
+   * ⚠️ 这一句是必须的，只靠 `window.addEventListener("keydown")` 兜不住：
+   * 分屏时（左白板、右代码）用户只要在代码区点过，焦点就整个跑出 webview 了。
+   * 之后用手写笔在白板上写字 —— 笔的 pointerdown **不会**像鼠标那样把焦点带回 webview
+   * （Chromium 对 pen 的默认行为不包含聚焦），于是按 1/2/3 换色、E 切橡皮全被
+   * 代码编辑器吃了，看起来就是「工具栏的快捷键在白板上不起作用，反倒写进了代码」
+   * （2026-10-13 老师实测）。所以这里显式聚焦，别等浏览器替我们做。
+   */
+  claimKeyboardFocus();
   if (e.button === 1 || (e.button === 0 && spaceDown)) {
     panPointer = e.pointerId;
     const [sx, sy] = localPoint(e);
@@ -1105,7 +1138,54 @@ function prepareSheetSvg(css: string): { inner: string; cssXml: string } {
   const clone = sheet.cloneNode(true) as HTMLElement;
   clone.style.boxShadow = "none";
   clone.style.margin = "0";
+  // srcset 里的远程候选在 SVG-as-image 里同样取不到，干脆去掉，只用已经内联好的 src
+  for (const img of Array.from(clone.querySelectorAll("img"))) img.removeAttribute("srcset");
   return { inner: new XMLSerializer().serializeToString(clone), cssXml: escapeXml(css) };
+}
+
+/**
+ * 导出前把题面里的网络图片交给扩展进程下载成 data URI。
+ *
+ * 不内联的话，`#sheet` 克隆进 SVG 后以 `<img>` 加载时浏览器不会取外部资源
+ * （KaTeX 字体也是因此内联的），屏幕上有图、导出的 PNG 里却是空白 ——
+ * 洛谷题面常带示例图，讲义缺图是很明显的问题。
+ *
+ * 失败/超时就按原样继续导出：宁可少几张图，也不能让整个导出卡死。
+ */
+async function inlineSheetImages(): Promise<void> {
+  const imgs = Array.from(sheet.querySelectorAll<HTMLImageElement>("img")).filter((img) =>
+    /^https?:\/\//i.test(img.src),
+  );
+  if (imgs.length === 0) return;
+  const urls = [...new Set(imgs.map((img) => img.src))];
+  setStatus(`正在准备题面图片（${urls.length} 张）…`);
+  const images = await new Promise<Record<string, string>>((resolve) => {
+    const timer = window.setTimeout(() => {
+      pendingImages = null;
+      resolve({});
+    }, 20000);
+    pendingImages = (map) => {
+      window.clearTimeout(timer);
+      resolve(map);
+    };
+    vscode.postMessage({ command: "inlineImages", urls });
+  });
+  let replaced = 0;
+  for (const img of imgs) {
+    const uri = images[img.src];
+    if (!uri) continue;
+    img.removeAttribute("srcset");
+    img.src = uri;
+    replaced++;
+  }
+  if (replaced < imgs.length) {
+    // 只进输出面板，讲题时别弹窗打断；导出的图里那几张会是空白
+    notify(
+      "image-inline-missing",
+      `题面里有 ${imgs.length - replaced} 张网络图片没能内联（导出的图里会是空白）`,
+      5,
+    );
+  }
 }
 
 function buildPageSvg(pageIndex: number, prepared: { inner: string; cssXml: string }): string {
@@ -1172,7 +1252,8 @@ async function renderPage(pageIndex: number, prepared: { inner: string; cssXml: 
   const s = exportScale(exportW, exportH);
   g.setTransform(s.x, 0, 0, s.y, 0, -pageTop(pageIndex) * s.y);
   for (let i = 0; i < strokes.length; i++) {
-    const path = paths[i] ?? buildPath(strokes[i]);
+    // 走 pathOf：轮廓算出来就缓存回 paths —— 多页导出时同一批笔迹不用每页重算一遍
+    const path = pathOf(i);
     if (!path) continue;
     g.fillStyle = strokes[i].color;
     g.fill(path);
@@ -1189,6 +1270,9 @@ async function exportPages(target?: "banshu"): Promise<void> {
   try {
     const { css, ok } = await prepareExportCss();
     if (!ok) setStatus("未取到公式字体，公式可能显示为占位字形");
+    // 题面里的网络图片先内联成 data URI：SVG 当图片加载时取不到外部资源，
+    // 不做这步，屏幕上有图、导出的 PNG 里是空白。
+    await inlineSheetImages();
     // 整纸只序列化一次，各页复用（每页只有 top 偏移不同）
     const prepared = prepareSheetSvg(css);
     const images: string[] = [];
@@ -1259,12 +1343,20 @@ function onKeyUp(e: KeyboardEvent): void {
 
 function onMessage(ev: MessageEvent<ExtMessage>): void {
   const msg = ev.data;
-  if (!msg || msg.command !== "exportCss") return;
-  exportCss = msg.css ?? "";
-  exportCssOk = msg.ok !== false;
-  const resolve = pendingCss;
-  pendingCss = null;
-  resolve?.({ css: exportCss, ok: exportCssOk });
+  if (!msg) return;
+  if (msg.command === "exportCss") {
+    exportCss = msg.css ?? "";
+    exportCssOk = msg.ok !== false;
+    const resolve = pendingCss;
+    pendingCss = null;
+    resolve?.({ css: exportCss, ok: exportCssOk });
+    return;
+  }
+  if (msg.command === "inlinedImages") {
+    const resolve = pendingImages;
+    pendingImages = null;
+    resolve?.(msg.images ?? {});
+  }
 }
 
 function start(): void {

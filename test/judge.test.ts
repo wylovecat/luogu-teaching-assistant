@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
-import { discoverSamples, hashOfFile, judgeFile } from "../src/judge/judge";
+import { discoverSamples, hashOfFile, judgeConcurrency, judgeFile, mapBounded } from "../src/judge/judge";
 import { buildDir, cacheRoot, exeNameFor, exePathFor } from "../src/judge/compile";
 import { shortHash } from "../src/util";
 // 直接引 stub（与 esbuild alias 指向同一文件，因此与源码共用一个模块实例）
@@ -220,4 +220,113 @@ test("judgeFile：输出上限按字节算，中文输出不会被多收一倍",
   } finally {
     setConfigOverride("judge.maxOutputBytes", 16 * 1024 * 1024);
   }
+});
+
+test("judgeConcurrency：留一格给编辑器，封顶 4，单核退化成串行", () => {
+  // 封顶 4：再多只是让每个进程分到的时间片更少，面板上的 durationMs 会一起虚高
+  assert.equal(judgeConcurrency(1), 1);
+  assert.equal(judgeConcurrency(2), 1);
+  assert.equal(judgeConcurrency(4), 3);
+  assert.equal(judgeConcurrency(8), 4);
+  assert.equal(judgeConcurrency(64), 4);
+  // 逻辑核数拿不到（0 / 异常值）时必须是 1，不能算出 0 个 worker 导致一个样例都不跑
+  assert.equal(judgeConcurrency(0), 1);
+  assert.equal(judgeConcurrency(-3), 1);
+  // 显式传参是硬约定：测试不能依赖跑测试那台机器的核数
+  assert.equal(judgeConcurrency(2.9), 1, "小数核数应向下取整");
+});
+
+test("mapBounded：完成顺序被打乱，但结果仍按输入顺序回填", async () => {
+  const items = ["a", "b", "c", "d"];
+  // 手动控制完成顺序：倒序 resolve，不依赖墙钟 —— 计时器在 CI 上会飘，顺序错乱必须是真的错乱
+  const pending: Array<{ index: number; resolve: () => void }> = [];
+  const completionOrder: number[] = [];
+  const running = mapBounded(items, items.length, (item, index) =>
+    new Promise<string>((resolve) => {
+      pending.push({
+        index,
+        resolve: () => {
+          completionOrder.push(index);
+          resolve(item);
+        },
+      });
+    }),
+  );
+  // 等所有任务都拿到号（limit ≥ 条数时应当已经齐了）
+  while (pending.length < items.length) await new Promise((r) => setTimeout(r, 0));
+  for (const p of [...pending].sort((a, b) => b.index - a.index)) p.resolve();
+
+  const out = await running;
+  assert.deepEqual(completionOrder, [3, 2, 1, 0], "完成顺序应当是倒序的（否则这用例测不出东西）");
+  assert.deepEqual(out, ["a", "b", "c", "d"], "返回顺序必须按输入顺序，不能按完成顺序");
+});
+
+test("mapBounded：并发度不超过 limit，且确实并发（不退化成串行）", async () => {
+  const run = async (limit: number, count: number): Promise<number> => {
+    let inFlight = 0;
+    let peak = 0;
+    await mapBounded(Array.from({ length: count }, (_, i) => i), limit, async () => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+    });
+    return peak;
+  };
+  const peak2 = await run(2, 6);
+  assert.ok(peak2 <= 2, `并发峰值 ${peak2} 不得超过 limit`);
+  assert.equal(peak2, 2, "必须真的并发（峰值 2），否则等于没并发");
+  assert.equal(await run(1, 5), 1, "limit 1 必须退化成串行");
+  assert.equal(await run(10, 3), 3, "只有 3 条时不该开出第 4 个 worker");
+  assert.equal(await run(0, 3), 1, "limit 为 0 也不能卡死，按串行处理");
+});
+
+test("mapBounded：fn 收到的 index 是输入下标，不是完成顺序的计数", async () => {
+  const items = ["x", "y", "z"];
+  // 三个任务耗时不同，完成顺序与输入顺序不同
+  const pairs = await mapBounded(items, items.length, async (item, index) => {
+    await new Promise((r) => setTimeout(r, (items.length - index) * 10));
+    return { item, index };
+  });
+  assert.deepEqual(
+    pairs,
+    [
+      { item: "x", index: 0 },
+      { item: "y", index: 1 },
+      { item: "z", index: 2 },
+    ],
+    "index 必须与输入下标一一对应",
+  );
+});
+
+test("mapBounded：空数组返回空数组，不报错", async () => {
+  assert.deepEqual(await mapBounded([], 4, async () => 1), []);
+  assert.deepEqual(await mapBounded([], 1, async () => 1), []);
+});
+
+test("judgeFile：多个样例并发跑完，状态与编号仍按样例顺序", { skip: !hasGpp }, async () => {
+  const dir = tmpDir();
+  const src = write(
+    dir,
+    "Order.cpp",
+    `#include <bits/stdc++.h>
+int main(){ long long a,b; std::cin>>a>>b; std::cout<<a+b<<"\\n"; }
+`,
+  );
+  // 三个样例给出**互不相同**的判定，顺序一错就能看出来：WA / AC / NO_EXPECTED
+  write(dir, "Order_1.in", "1 2\n");
+  write(dir, "Order_1.out", "99\n");
+  write(dir, "Order_2.in", "3 4\n");
+  write(dir, "Order_2.out", "7\n");
+  write(dir, "Order_3.in", "5 6\n");
+
+  const report = await judgeFile(src);
+  assert.equal(report.compile.ok, true);
+  assert.equal(report.cases.length, 3);
+  assert.deepEqual(report.cases.map((c) => c.index), [1, 2, 3]);
+  assert.deepEqual(report.cases.map((c) => c.status), ["WA", "AC", "NO_EXPECTED"]);
+  assert.deepEqual(
+    report.cases.map((c) => path.basename(c.inputFile)),
+    ["Order_1.in", "Order_2.in", "Order_3.in"],
+  );
 });

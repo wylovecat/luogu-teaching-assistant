@@ -11,7 +11,7 @@ import type * as vscode from "vscode";
 import { buildWhiteboardHtml } from "../src/whiteboard/panelHtml";
 import { collectFontUrls, inlineFontSources } from "../src/whiteboard/fontCss";
 import { FrameLoop, type FrameScheduler } from "../src/whiteboard/frameLoop";
-import { whiteboardStatementMarkdown } from "../src/whiteboard/source";
+import { dataRangeFromHint, whiteboardStatementMarkdown } from "../src/whiteboard/source";
 import type { Statement } from "../src/problems/statement";
 import {
   DEFAULT_EXPORT_DPI,
@@ -43,6 +43,7 @@ import {
   distanceToSegment,
   exportPixels,
   exportScale,
+  multiPageFileStem,
   pageTop,
   pagesHeight,
   penBarHeight,
@@ -381,7 +382,7 @@ function baseStatement(over: Partial<Statement> = {}): Statement {
       { input: "1 2", output: "3" },
       { input: "10 20", output: "30" },
     ],
-    hint: "说明（背景介绍）",
+    hint: "本题改编自某部电影。\n\n对于 100% 的数据，1 ≤ n ≤ 1e5。",
     prompt: "提示正文",
     timeLimitMs: 1000,
     memoryLimitMb: 256,
@@ -397,11 +398,140 @@ test("白板题面：只留标题 + 题目描述/输入格式/输出格式/一�
   for (const title of ["## 题目描述", "## 输入格式", "## 输出格式", "## 样例", "## 提示"]) {
     assert.ok(md.includes(title), `缺 ${title}`);
   }
-  assert.ok(!md.includes("## 说明"), "说明不该进白板");
   assert.ok(!md.includes("时间限制"), "时间/内存限制不该进白板");
   assert.ok(!md.includes("10 20"), "只保留第一组样例");
   assert.equal((md.match(/\*\*输入\*\*/g) ?? []).length, 1, "样例只该有一组");
   assert.ok(!md.includes("站点原始 markdown"), "有正规字段时不该用原始 markdown");
+});
+
+// ── 说明：只留数据范围 ──────────────────────────────────────────
+
+test("白板说明：留数据范围那句，砍掉同段里的背景介绍", () => {
+  const md = whiteboardStatementMarkdown(baseStatement());
+  assert.ok(md.includes("## 说明"), "有数据范围时该有说明小节");
+  assert.ok(md.includes("对于 100% 的数据，1 ≤ n ≤ 1e5。"), "数据范围要上纸");
+  assert.ok(!md.includes("本题改编自某部电影"), "背景介绍不该上纸");
+});
+
+test("白板说明：块内多档数据范围与收尾说明都跟着留", () => {
+  // 块一旦被「数据范围」这类标题打开，块内的分档、保证、附加说明都算数据范围，
+  // 一直收到下一个标题为止（fixture 取自洛谷真实排版风格）。
+  const md = whiteboardStatementMarkdown(
+    baseStatement({
+      hint: [
+        "很久很久以前，有一个遥远的国度。",
+        "",
+        "**数据范围**",
+        "",
+        "- 对于 30% 的数据，1 ≤ n ≤ 100；",
+        "- 对于 100% 的数据，1 ≤ n ≤ 1e5。",
+        "",
+        "保证 1 ≤ aᵢ ≤ 1e9。",
+        "",
+        "输入数据保证 a 是偶数。",
+        "",
+        "**样例说明**",
+        "",
+        "（本题出题人是老王。）",
+      ].join("\n"),
+    }),
+  );
+  for (const keep of [
+    "**数据范围**",
+    "- 对于 30% 的数据，1 ≤ n ≤ 100；",
+    "- 对于 100% 的数据，1 ≤ n ≤ 1e5。",
+    "保证 1 ≤ aᵢ ≤ 1e9。",
+    "输入数据保证 a 是偶数。",
+  ]) {
+    assert.ok(md.includes(keep), `该留的没留：${keep}`);
+  }
+  assert.ok(!md.includes("很久很久以前"), "故事不该上纸");
+  // 后面的 `**样例说明**` 是非数据范围标题，它自己与它下面的括注都不该进纸
+  assert.ok(!md.includes("样例说明"), "收场标题不该上纸");
+  assert.ok(!md.includes("本题出题人是老王"), "标题之后的讲解不该上纸");
+});
+
+test("白板说明：纯条件行（不提「数据」二字）也能认出数据范围", () => {
+  const bare = whiteboardStatementMarkdown(
+    baseStatement({ hint: "题面背景一二三。\n\n1 ≤ n ≤ 1e5，1 ≤ m ≤ 100000。" }),
+  );
+  assert.ok(bare.includes("1 ≤ n ≤ 1e5"), "纯条件行要认出来");
+  assert.ok(!bare.includes("题面背景一二三"), "同段的背景仍要砍掉");
+});
+
+test("白板说明：一句数据范围都没有时，整节不显示", () => {
+  const md = whiteboardStatementMarkdown(
+    baseStatement({ hint: "本题改编自 2001 年的某部电影，题意轻松。" }),
+  );
+  assert.ok(!md.includes("## 说明"), "没有数据范围就不该硬塞说明小节");
+  assert.ok(!md.includes("2001 年的某部电影"), "背景介绍一个字都不该上纸");
+});
+
+test("白板说明：被折行的数据范围要整块留下（P2085 真机 hint 原文）", () => {
+  // 2026-10-13 老师反馈：P2085 纸上只出现到「$1 \le A_i \le 10$,」后面的没了。
+  // 原因是洛谷把这句折成了三行，断在逗号后面，后两行既没有「数据」二字、
+  // 也没有「数字 + 不等号」的完整形状（`$0 \leq B_i...` 里首个比较符前没有数字），
+  // 按单行判据筛就会断在中间。这条钉住「续行也要跟上来」。
+  const hint = fs.readFileSync(path.join(__dirname, "..", "test", "fixture-p2085-hint.txt"), "utf8");
+  const md = whiteboardStatementMarkdown(baseStatement({ hint }));
+  for (const keep of [
+    "#### 数据规模与约定",
+    "对于全部的测试点，保证 $1 \\leq n,m\\le10000$，$1 \\leq A_i\\le10$,",
+    "$0 \\leq B_i\\le100$,",
+    "$0 \\leq C_i\\le10^4$。",
+  ]) {
+    assert.ok(md.includes(keep), `数据范围被截断了，少了：${keep}`);
+  }
+});
+
+// ── 真机 hint 回归（fixture 是从洛谷公开接口原样抓下来的） ──────────
+// 这一组守的是「别把非数据范围的东西收进讲义」：洛谷 hint 是一锅大杂烩，
+// 广告、多语言程序范例、整段样例讲解都挂在同一个字段里。
+
+function fixture(name: string): string {
+  return fs.readFileSync(path.join(__dirname, "..", "test", name), "utf8");
+}
+
+test("白板说明：P1001 只留数据范围，广告与十几门语言的程序范例都不上纸", () => {
+  const hint = fixture("fixture-P1001-hint.txt");
+  const kept = dataRangeFromHint(hint);
+  assert.ok(kept.includes("**数据范围**"), "数据范围该留");
+  assert.ok(kept.includes("$-{10}^9 \\le a,b \\le {10}^9$"), "范围式子该留");
+  for (const junk of ["广告", "解题教材", "程序范例", "#include", "scanf", "Console.ReadLine", "item.taobao"]) {
+    assert.ok(!kept.includes(junk), `不该上纸的内容漏进来了：${junk}`);
+  }
+  // 原 hint 有 175 个非空行，筛完只该剩「数据范围标题 + 一句范围」这个量级
+  assert.equal(kept.split("\n").filter((l) => l.trim()).length, 2, "只该剩标题与范围那句");
+});
+
+test("白板说明：P1909 的样例讲解不上纸，数据范围与子任务表要留", () => {
+  const kept = dataRangeFromHint(fixture("fixture-P1909-hint.txt"));
+  assert.ok(kept.includes("**数据范围**"), "数据范围该留");
+  assert.ok(kept.includes("不超过 $10000$ 的正整数"), "范围那句该留");
+  assert.ok(kept.includes("**子任务**"), "块内的子任务表该留");
+  // 样例讲解（「…所以最后输出的答案是 54」）是叙述句不是取值范围，一个字都不该进纸
+  assert.ok(!kept.includes("所以最后输出的答案是"), "样例讲解不该上纸");
+  assert.ok(!kept.includes("P 老师需要购买至少"), "样例讲解不该上纸");
+});
+
+test("白板说明：P2141 只留【数据说明】，【样例说明】整段砍掉", () => {
+  const kept = dataRangeFromHint(fixture("fixture-P2141-hint.txt"));
+  assert.ok(kept.includes("【数据说明】"), "数据说明该留");
+  assert.ok(kept.includes("$3 \\leq n \\leq 100$"), "范围式子该留");
+  assert.ok(!kept.includes("【样例说明】"), "样例说明标题不该上纸");
+  assert.ok(!kept.includes("加数和被加数"), "样例说明正文不该上纸");
+});
+
+test("白板说明：P1046 通篇没有数据范围时整节不显示", () => {
+  const kept = dataRangeFromHint(fixture("fixture-P1046-hint.txt"));
+  assert.equal(kept, "", "没有数据范围就该给空串");
+});
+
+test("白板说明：正文里的行内公式不会因为以 $ 开头就被当数据范围", () => {
+  const md = whiteboardStatementMarkdown(
+    baseStatement({ hint: "$a+b$ 这个式子很有意思，值得玩味。\n\n（出题人是老王。）" }),
+  );
+  assert.ok(!md.includes("## 说明"), "整段都是讲解、没有数据范围时不该硬留");
 });
 
 test("白板题面：缺字段不留空小节；一点正文都没有时才退回原始 markdown", () => {
@@ -417,6 +547,8 @@ test("白板题面：缺字段不留空小节；一点正文都没有时才退�
     outputDescription: "",
     samples: [],
     prompt: "",
+    // 说明里也要一句数据范围都没有，否则「纸上有正文」就算不上退路
+    hint: "本题改编自某部电影。",
     rawMarkdown: "只有原始 markdown",
   });
   assert.equal(rawOnly, "只有原始 markdown");
@@ -430,6 +562,7 @@ test("白板题面：缺字段不留空小节；一点正文都没有时才退�
     outputDescription: "",
     samples: [],
     prompt: "",
+    hint: "",
     rawMarkdown: "   ",
   });
   assert.equal(nothing, "", "什么都没有时应给空串，而不是一个空标题");
@@ -597,6 +730,15 @@ test("白板面板：严格 CSP + 脚本走 nonce，不放 unsafe-inline", () =>
   assert.match(html, /script-src 'nonce-/);
   assert.ok(!/script-src[^"]*unsafe-inline/.test(html), "script-src 不能放开 unsafe-inline");
   assert.match(html, /katex\.min\.css/, "题面公式要带 KaTeX 样式");
+});
+
+test("白板面板：视口可聚焦 + 落笔抢焦点 + 不画聚焦边框（数位笔切色失灵的解药）", () => {
+  // 2026-10-13 老师反馈：分屏下先在代码区点过，再用手写笔在白板上写字，
+  // 按 1/2/3 换色、E 切橡皮会写进代码编辑器 —— 焦点整个留在 webview 外面了。
+  // 手写笔的 pointerdown 不像鼠标那样顺带把焦点带回 webview，必须自己抢。
+  const html = whiteboardHtml();
+  assert.match(html, /id="viewport"[^>]*tabindex="0"/, "视口要可聚焦，否则 focus() 是空操作");
+  assert.match(html, /#viewport:focus[^{]*\{[^}]*outline:\s*none/, "聚焦时不要画默认高亮圈");
 });
 
 test("白板面板：必备元素、三色笔（黑默认）与橡皮擦都在", () => {
@@ -812,4 +954,31 @@ test("白板面板：载荷带上导出像素尺寸（默认 150dpi，面板按�
 
 test("白板面板：笔迹画布单独提一层（重绘别把题面 DOM 一起重画）", () => {
   assert.match(whiteboardHtml(), /#ink\s*\{[^}]*will-change:\s*transform/, "少了这一层，书写时会连题面一起重绘");
+});
+
+test("多页导出的文件名主干只剥自己加的那个 -p1（否则第 3 页会覆盖第 1 页）", () => {
+  // 保存框的默认名：<题名>-p1.png → 后续页是 <题名>-p2/-p3
+  assert.equal(multiPageFileStem("P1395 会议-p1.png"), "P1395 会议");
+  // 用户自己把名字定成 foo-p3.png：页码**不能**被剥掉，
+  // 否则第 3 页会写回 foo-p3.png，把第 1 页覆盖掉（讲义凭空少一页）
+  assert.equal(multiPageFileStem("foo-p3.png"), "foo-p3");
+  assert.equal(multiPageFileStem("foo-p2.png"), "foo-p2");
+  // 单页文件名原样
+  assert.equal(multiPageFileStem("foo.png"), "foo");
+  // 大写后缀也认
+  assert.equal(multiPageFileStem("foo-P1.PNG"), "foo");
+});
+
+test("白板导出：先内联题面网络图再序列化（SVG 取不到外部资源）", () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "src", "whiteboard", "webview.ts"), "utf8");
+  // SVG 当图片加载时浏览器不取外部资源：不内联的话屏幕上有图、导出的 PNG 里是空白
+  assert.match(src, /async function inlineSheetImages\(\)/, "缺内联题面图片的逻辑");
+  assert.match(src, /command: "inlineImages"/, "webview 没向扩展进程要图片");
+  // 顺序：先内联、再克隆序列化（反了就白内联了）
+  const inlineAt = src.indexOf("await inlineSheetImages();");
+  const serializeAt = src.indexOf("const prepared = prepareSheetSvg(css);");
+  assert.ok(inlineAt > 0 && serializeAt > 0, "导出流程里少了内联或序列化那一步");
+  assert.ok(inlineAt < serializeAt, "必须先内联再序列化");
+  // srcset 里的远程候选同样取不到，要去掉
+  assert.match(src, /removeAttribute\("srcset"\)/, "没去掉 srcset");
 });

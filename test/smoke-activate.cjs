@@ -13,6 +13,10 @@ const disposables = [];
 const registered = [];
 const handlers = new Map();
 let lastWebviewHtml = "";
+/** 扩展推给 webview 的消息（按顺序） */
+const postedToWebview = [];
+/** 最近一个 webview 的「收到消息」回调 —— 测试用它模拟 webview 发消息给扩展 */
+let lastReceiveHandler = undefined;
 /** 「问题」面板里被发布出去的条目：{ uri, diagnostics } */
 const publishedProblems = [];
 
@@ -171,9 +175,18 @@ const vscode = {
             this._html = v;
             lastWebviewHtml = v;
           },
-          onDidReceiveMessage: d,
+          onDidReceiveMessage: (handler) => {
+            lastReceiveHandler = handler;
+            return d();
+          },
           asWebviewUri: (u) => u,
           cspSource: "vscode-webview://stub",
+          // 扩展往 webview 推的消息（submitResult / submitDone 之类）记下来，
+          // 好断言「提交结束后按钮真的被放行」这条链路
+          postMessage: async (msg) => {
+            postedToWebview.push(msg);
+            return true;
+          },
         },
         onDidDispose: d,
         reveal: noop,
@@ -286,6 +299,22 @@ int main(){ long long a,b; std::cin>>a>>b; std::cout<<a+b<<"\\n"; return 0; }
   assert.match(lastWebviewHtml, /id="submit"/, "评测面板要有「提交到洛谷」按钮");
   assert.match(lastWebviewHtml, /提交到洛谷/, "提交按钮的文案要说清提交到洛谷");
   assert.match(lastWebviewHtml, /command:'submit'/, "评测面板的提交按钮要把消息发给扩展");
+  // 提交结果直接落在评测面板里：要有承载区、渲染函数与打开记录的入口
+  // （结果本身靠 postMessage 推，这里能验的是「面板具备就地显示的能力」）
+  assert.match(lastWebviewHtml, /id="submit-result"/, "评测面板要有提交结果承载区");
+  assert.match(lastWebviewHtml, /command === 'submitResult'/, "面板要接收扩展推来的提交结果");
+  assert.match(lastWebviewHtml, /renderSubmit/, "面板要能把提交结果渲染出来");
+  assert.match(lastWebviewHtml, /command:'openRecord'/, "结果卡片要有「到洛谷查看记录」的回发入口");
+
+  // 点「提交」后，无论成功失败，扩展都必须回一条 submitDone 让按钮复位。
+  // 未登录态下提交会早早返回（requireLogin 拦下），正好用来验这条链路不会挂住。
+  postedToWebview.length = 0;
+  assert.equal(typeof lastReceiveHandler, "function", "webview 的收信回调没挂上");
+  await lastReceiveHandler({ command: "submit" });
+  assert.ok(
+    postedToWebview.some((m) => m && m.command === "submitDone"),
+    `提交结束后必须回 submitDone 让按钮复位，实际只收到：${JSON.stringify(postedToWebview)}`,
+  );
 
   // 未登录时点「提交」只应提示登录、不能抛异常（面板里 submit 走的就是这条路径）
   await handlers.get("lgAssist.submit")();
